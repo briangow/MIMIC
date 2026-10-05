@@ -17,14 +17,11 @@
 -- TRUNCATE TABLE is not supported, organize create or replace
 --
 -- remove dots from ICD codes
--- loaded custom mapping:
---      gcpt_procedure_to_concept -> mimiciv_proc_itemid
---      gcpt_datetimeevents_to_concept -> mimiciv_proc_datetimeevents
 -- to review "custom mapping" from d_icd_procedures: domain_id = 'd_icd_procedures' AND vocabulary_id = 'MIMIC Local Codes'
 -- to review relationship_id IN ('CPT4 - SNOMED eq','Maps to')
 -- datetimeevents: to summarize count of duplicated rows or to use charttime instead of value?
 -- Rule 1
---      add more custom mapping: gcpt_cpt4_to_concept --> mimiciv_proc_xxx (?)
+--      add more custom mapping for CPT4 if needed
 -- -------------------------------------------------------------------
 
 
@@ -112,7 +109,6 @@ WHERE
 -- -------------------------------------------------------------------
 -- lk_proc_d_items_clean from datetimeevents
 -- Rule 4, d_items custom mapping
--- gcpt_datetimeevents_to_concept -> mimiciv_proc_datetimeevents
 -- filter out 55 rows where the year is earlier than one year before patient's birth
 -- BG updating this to filter out all rows where the year is earlier than the patient's birth in OMOP which is equal to anchor_year
 -- -------------------------------------------------------------------
@@ -141,7 +137,7 @@ WHERE
 -- -------------------------------------------------------------------
 -- mapping
 -- HCPCS Rule 1
--- add gcpt_cpt4_to_concept --> mimiciv_proc_xxx (?)
+-- add more custom mapping for CPT4 if needed
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_hcpcs_concept AS
@@ -199,8 +195,6 @@ WHERE
 -- -------------------------------------------------------------------
 -- mapping
 -- Rule 2, 4 
--- gcpt_procedure_to_concept -> mimiciv_proc_itemid (initially on itemid)
--- gcpt_datetimeevents_to_concept -> mimiciv_proc_datetimeevents (move from label to itemid)
 -- can be optimized by including Specimen mapping to lk_itemid_concept
 -- -------------------------------------------------------------------
 

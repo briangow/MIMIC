@@ -14,8 +14,6 @@
 -- -------------------------------------------------------------------
 -- Known issues / Open points:
 --
--- custom mapping:
---      gcpt_lab_unit_to_concept -> mimiciv_meas_unit
 -- -------------------------------------------------------------------
 
 
@@ -50,7 +48,6 @@ SELECT
 FROM
     @etl_project.@etl_dataset.voc_concept vc
 WHERE
-    -- gcpt_lab_unit_to_concept -> mimiciv_meas_unit
     vc.vocabulary_id IN ('UCUM', 'mimiciv_meas_unit', 'mimiciv_meas_wf_unit')
     AND vc.domain_id = 'Unit'
 ;

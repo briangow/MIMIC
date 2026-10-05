@@ -11,7 +11,6 @@
 --      lk_vis_part_1.sql
 --      lk_meas_labevents.sql
 --      lk_meas_specimen.sql
---      lk_meas_waveform.sql
 -- -------------------------------------------------------------------
 
 -- -------------------------------------------------------------------
@@ -28,7 +27,6 @@
 --      lk_meas_labevents_mapped
 --      lk_meas_organism_mapped
 --      lk_meas_ab_mapped
---      lk_meas_waveform_mapped
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_visit_no_hadm_all AS
@@ -126,7 +124,6 @@ GROUP BY
 -- lk_visit_detail_waveform_dist
 --
 -- collect rows without hadm_id from all tables affected by this case:
---      lk_meas_waveform_mapped
 -- -------------------------------------------------------------------
 
 -- -------------------------------------------------------------------
@@ -322,12 +319,6 @@ LEFT JOIN
 
 -- -------------------------------------------------------------------
 -- lk_visit_concept
---
--- gcpt_admission_type_to_concept -> mimiciv_vis_admission_type
--- gcpt_admission_location_to_concept -> mimiciv_vis_admission_location
--- gcpt_discharge_location_to_concept -> mimiciv_vis_discharge_location
--- brand new vocabulary -> mimiciv_vis_service
--- gcpt_care_site -> mimiciv_cs_place_of_service
 --
 -- keep exact values of admission type etc as custom concepts, 
 -- then map it to standard Visit concepts
