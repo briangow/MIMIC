@@ -18,9 +18,9 @@ The project implements an ETL conversion of MIMIC IV PhysioNet dataset to OMOP C
 * Distribute mapped data by target CDM tables according to target_domain_id values.
 
 ######The ETL process encapsulates the following workflows:######
-* **vocabulary refresh**, which loads vocabulary and custom mapping data from local folders to the vocabulary dataset. 
+* **ddl**, creates empty vocab and cdm tables in the ETL dataset.
+* **vocabulary refresh**, which loads vocabulary and custom mapping data from local folders. 
 * **waveform collecting**, which loads parsed waveform data from google storage bucket to the waveform staging dataset.
-* **ddl**, which creates empty cdm tables in the ETL dataset.
 * **staging**, which creates a snapshot of the source tables and vocabulary tables in the ETL dataset.
 * **etl**, which performs the ETL logic.
 * **ut**, which runs internal unit tests.
@@ -36,27 +36,42 @@ The project implements an ETL conversion of MIMIC IV PhysioNet dataset to OMOP C
 
 ######To run ETL end-to-end:######
 * load the latest standard OMOP vocabularies from http://athena.ohdsi.org if needed
-    * create a working copy of the loaded vocabularies, where custom mapping data will be added to
-* set variables in vocabulary_refresh/README.md
-    * run vocabulary refresh commands given below from directory "vocabulary_refresh"
 * set the project variables in conf/\*.etlconf
-    * run script "wf_read" to load waveform sample data if needed
-    * run workflow commands below in the given sequence 
-        * in the workflow commands <env> is the "environment" name, which equals "dev" for the demo dataset and "full" for the full set
+    * set `@voc_project` and `@voc_dataset` to the dataset where unified `voc_*` materialized views will be created
+    * set `@athena_project` / `@athena_dataset` and any needed `@custom_delta_project_*` / `@custom_delta_dataset_*` variables for the source datasets that will hold the uploaded raw vocabulary tables
+* configure vocabulary source folders in `vocabulary_refresh/vocabulary_refresh.conf`
+    * set `athena_vocab_dir`, `athena_project`, and `athena_dataset` for the Athena upload target
+    * leave `athena_vocab_dir` empty to skip Athena loading
+    * set one or more `custom_delta_vocab_dir_*` entries plus matching `custom_delta_project_*` / `custom_delta_dataset_*` entries for custom delta vocabulary folders to load
+* create each BigQuery dataset before running the vocabulary workflows
+    * create the unified view dataset named by `@voc_project.@voc_dataset`
+    * create the Athena raw upload dataset if `@athena_dataset` will be used
+    * create each configured custom delta raw upload dataset such as `@custom_delta_dataset_1`, `@custom_delta_dataset_2`, etc.
+    * the uploader does not create datasets automatically; it only loads tables into datasets that already exist
+* run script "wf_read" to load waveform sample data if needed
+* run workflow commands below in the given sequence 
+    * in the workflow commands <env> is the "environment" name, which equals "dev" for the demo dataset and "full" for the full set
+    * run `workflow_vocab_upload_ddl.conf` before `workflow_vocabulary_refresh.conf` so the vocabulary tables from `etl/ddl/ddl_voc_5_4_2.sql` are created in each already-created raw upload dataset before loading data
+    * run `workflow_ddl.conf` for the main ETL dataset as usual
+    * `workflow_vocabulary_refresh.conf` now uploads the raw vocabulary tables and then rebuilds the unified `voc_*` materialized views
 
 * set the project root (location of this file) as the current directory
 ```
-python scripts/upload_vocab_to_bq.py # do this for Athena and all custom vocabs one at a time, adding each to it's own BQ dataset
-scripts/create_vocab_views.sql # run this directly in BigQuery to setup a single view of all the vocabs
+python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_ddl.conf
+python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_vocab_upload_ddl.conf
+python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_vocabulary_refresh.conf
 python scripts/wf_read.py -e conf/<env>.etlconf
 python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_setup.conf
-python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_ddl.conf
 python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_staging.conf
 python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_etl.conf
 python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_ut.conf
 python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_metrics.conf
 python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_unload.conf
 ```
+
+* `conf/workflow_vocabulary_refresh.conf` runs `vocabulary_refresh/upload_vocab_to_bq.py --config vocabulary_refresh/vocabulary_refresh.conf --replace` and then `vocabulary_refresh/create_vocab_views.py`
+* `conf/workflow_vocab_upload_ddl.conf` runs `vocabulary_refresh/run_vocab_upload_ddl.py`
+* only the vocabulary source directories configured in `vocabulary_refresh/vocabulary_refresh.conf` are loaded
 
 ######To look at UT and Metrics reports:######
 * see metrics dataset name in the corresponding .etlconf file
