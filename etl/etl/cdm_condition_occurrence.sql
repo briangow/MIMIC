@@ -100,51 +100,6 @@ WHERE
 
 -- -------------------------------------------------------------------
 -- rule 2
--- Chartevents.value
--- -------------------------------------------------------------------
-
-INSERT INTO @etl_project.@etl_dataset.condition_occurrence
-SELECT
-    `@etl_project.@etl_dataset`.obf_id_str(src.trace_id, 32)    AS condition_occurrence_id,
-    per.person_id                                               AS person_id,
-    COALESCE(src.target_concept_id, 0)                          AS condition_concept_id,
-    DATE_ADD(CAST(src.start_datetime AS DATE), INTERVAL ds.offset_days DAY) AS condition_start_date,
-    DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) AS condition_start_datetime,
-    DATE_ADD(CAST(src.start_datetime AS DATE), INTERVAL ds.offset_days DAY) AS condition_end_date,
-    DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) AS condition_end_datetime,
-    32817                                                       AS condition_type_concept_id, -- EHR  Type Concept    Type Concept
-    CAST(NULL AS STRING)                                        AS stop_reason,
-    CAST(NULL AS INT64)                                         AS provider_id,
-    vis.visit_occurrence_id                                     AS visit_occurrence_id,
-    CAST(NULL AS INT64)                                         AS visit_detail_id,
-    src.source_code                                             AS condition_source_value,
-    COALESCE(src.source_concept_id, 0)                          AS condition_source_concept_id,
-    CAST(NULL AS STRING)                                        AS condition_status_source_value,
-    CAST(NULL AS INT64)                                         AS condition_status_concept_id,
-    --
-    CONCAT('condition.', src.unit_id)                           AS unit_id,
-    src.load_table_id                                           AS load_table_id,
-    src.load_row_id                                             AS load_row_id,
-    src.trace_id                                                AS trace_id
-FROM
-    @etl_project.@etl_dataset.lk_chartevents_condition_mapped src
-INNER JOIN
-    @etl_project.@etl_dataset.person per
-        ON CAST(src.subject_id AS STRING) = per.person_source_value
-INNER JOIN
-    @etl_project.@etl_dataset.visit_occurrence vis
-        ON  vis.visit_source_value = CAST(src.hadm_id AS STRING)
-LEFT JOIN
-    @etl_project.@etl_dataset.person_date_shift_lookup ds
-        ON per.person_id = ds.person_id
-WHERE
-    src.target_domain_id = 'Condition'
-;
-
-
-
--- -------------------------------------------------------------------
--- rule 3
 -- Chartevents
 -- -------------------------------------------------------------------
 
@@ -172,7 +127,7 @@ SELECT
     src.load_row_id                                             AS load_row_id,
     src.trace_id                                                AS trace_id
 FROM
-    @etl_project.@etl_dataset.lk_chartevents_mapped src
+    @etl_project.@etl_dataset.lk_chartevents_condition_mapped src
 INNER JOIN
     @etl_project.@etl_dataset.person per
         ON CAST(src.subject_id AS STRING) = per.person_source_value
@@ -182,8 +137,6 @@ INNER JOIN
 LEFT JOIN
     @etl_project.@etl_dataset.person_date_shift_lookup ds
         ON per.person_id = ds.person_id
-WHERE
-    src.target_domain_id = 'Condition'
 ;
 
 

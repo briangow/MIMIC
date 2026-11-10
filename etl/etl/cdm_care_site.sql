@@ -17,8 +17,8 @@
 --
 -- negative unique id from FARM_FINGERPRINT(GENERATE_UUID())
 --
--- custom mapping: 
---      gcpt_care_site -> mimiciv_cs_place_of_service
+-- source vocabulary mapping:
+--      MIMIC4 / m4_careunit -> standard OMOP via `Maps to`
 -- -------------------------------------------------------------------
 
 -- -------------------------------------------------------------------
@@ -28,7 +28,7 @@
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_trans_careunit_clean AS
 SELECT
     src.careunit                        AS source_code,
-    src.load_table_id                   AS load_table_id,
+    MIN(src.load_table_id)              AS load_table_id,
     0                                   AS load_row_id,
     MIN(src.trace_id)                   AS trace_id
 FROM 
@@ -36,8 +36,7 @@ FROM
 WHERE
     src.careunit IS NOT NULL
 GROUP BY
-    careunit,
-    load_table_id
+    careunit
 ;
 
 
@@ -45,6 +44,50 @@ GROUP BY
 -- -------------------------------------------------------------------
 -- care_site
 -- -------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_care_site_concept AS
+SELECT
+    source_code,
+    source_concept_id,
+    target_concept_id,
+    concept_class_id
+FROM (
+    SELECT
+        src.source_code                                              AS source_code,
+        vc.concept_id                                                AS source_concept_id,
+        COALESCE(vc2.concept_id, vc.concept_id)                      AS target_concept_id,
+        vc.concept_class_id                                          AS concept_class_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY src.source_code
+            ORDER BY
+                CASE vc.concept_class_id
+                    WHEN 'm4_careunit' THEN 1
+                    WHEN 'm4_adm_location' THEN 2
+                    ELSE 3
+                END,
+                vc.concept_id
+        )                                                            AS rn
+    FROM
+        @etl_project.@etl_dataset.lk_trans_careunit_clean src
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_code = src.source_code
+            AND vc.vocabulary_id = 'MIMIC4'
+            AND vc.concept_class_id IN ('m4_careunit', 'm4_adm_location')
+            AND vc.invalid_reason IS NULL
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+)
+WHERE
+    rn = 1
+;
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.care_site
 (
@@ -66,7 +109,7 @@ INSERT INTO @etl_project.@etl_dataset.care_site
 SELECT
     `@etl_project.@etl_dataset`.obf_id_str(src.source_code, 32) AS care_site_id,
     src.source_code                                             AS care_site_name,
-    vc2.concept_id                                              AS place_of_service_concept_id,
+    csc.target_concept_id                                       AS place_of_service_concept_id,
     1                                                           AS location_id,  -- hard-coded BIDMC
     src.source_code                                             AS care_site_source_value,
     src.source_code                                             AS place_of_service_source_value,
@@ -77,17 +120,7 @@ SELECT
 FROM 
     @etl_project.@etl_dataset.lk_trans_careunit_clean src
 LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON  vc.concept_code = src.source_code
-        AND vc.vocabulary_id = 'mimiciv_cs_place_of_service' -- gcpt_care_site
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
+    @etl_project.@etl_dataset.lk_care_site_concept csc
+        ON csc.source_code = src.source_code
 ;
 
