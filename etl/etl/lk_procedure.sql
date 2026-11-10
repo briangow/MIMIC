@@ -28,6 +28,7 @@
 DROP TABLE IF EXISTS @etl_project.@etl_dataset.lk_datetimeevents_concept;
 DROP TABLE IF EXISTS @etl_project.@etl_dataset.lk_proc_event_clean;
 DROP TABLE IF EXISTS @etl_project.@etl_dataset.lk_datetimeevents_clean;
+DROP TABLE IF EXISTS @etl_project.@etl_dataset.lk_proc_d_items_clean;
 
 -- -------------------------------------------------------------------
 -- lk_hcpcsevents_clean
@@ -63,18 +64,16 @@ SELECT
     src.subject_id                              AS subject_id,
     src.hadm_id                                 AS hadm_id,
     adm.dischtime                               AS start_datetime,
-    src.icd_code                                AS icd_code,
+    src.icd_code                                AS source_code,
     src.icd_version                             AS icd_version,
     CASE
         WHEN src.icd_version = 9 THEN 'ICD9Proc'
         WHEN src.icd_version = 10 THEN 'ICD10PCS'
-        ELSE 'Unknown'
     END                                         AS source_vocabulary_id,
-    REPLACE(src.icd_code, '.', '')              AS source_code, -- to join lk_icd_proc_concept
     --
-    src.load_table_id                   AS load_table_id,
-    src.load_row_id                     AS load_row_id,
-    src.trace_id                        AS trace_id
+    src.load_table_id                           AS load_table_id,
+    src.load_row_id                             AS load_row_id,
+    src.trace_id                                AS trace_id
 FROM
     @etl_project.@etl_dataset.src_procedures_icd src
 INNER JOIN
@@ -87,14 +86,15 @@ INNER JOIN
 -- Rule 3, d_items custom mapping
 -- -------------------------------------------------------------------
 
-CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_proc_d_items_clean AS
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_proc_event_clean AS
 SELECT
     src.subject_id                      AS subject_id,
     src.hadm_id                         AS hadm_id,
     src.starttime                       AS start_datetime,
-    src.value                           AS quantity, 
     src.itemid                          AS itemid,
-                            -- THEN it stores the duration... this is a warkaround and may be inproved
+    CAST(src.itemid AS STRING)          AS source_code,
+    d_items.label                       AS source_label,
+    src.value                           AS quantity,
     --
     'procedureevents'                   AS unit_id,
     src.load_table_id                   AS load_table_id,
@@ -102,75 +102,92 @@ SELECT
     src.trace_id                        AS trace_id
 FROM
     @etl_project.@etl_dataset.src_procedureevents src
+INNER JOIN
+    @etl_project.@etl_dataset.src_d_items d_items
+        ON src.itemid = d_items.itemid
 WHERE
     src.cancelreason = 0 -- not cancelled
 ;
 
 -- -------------------------------------------------------------------
--- lk_proc_d_items_clean from datetimeevents
+-- lk_datetimeevents_clean
 -- Rule 4, d_items custom mapping
--- filter out 55 rows where the year is earlier than one year before patient's birth
--- BG updating this to filter out all rows where the year is earlier than the patient's birth in OMOP which is equal to anchor_year
 -- -------------------------------------------------------------------
-INSERT INTO @etl_project.@etl_dataset.lk_proc_d_items_clean
+
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_datetimeevents_clean AS
 SELECT
     src.subject_id                      AS subject_id,
     src.hadm_id                         AS hadm_id,
-    src.value                           AS start_datetime,
-    1                                   AS quantity,
+    src.charttime                       AS start_datetime,
     src.itemid                          AS itemid,
+    d_items.label                       AS source_code,
+    d_items.label                       AS source_label,
+    CAST(1 AS FLOAT64)                  AS quantity,
     --
     'datetimeevents'                    AS unit_id,
     src.load_table_id                   AS load_table_id,
     src.load_row_id                     AS load_row_id,
-    src.trace_id                        AS trace_id    
+    src.trace_id                        AS trace_id
 FROM
-    @etl_project.@etl_dataset.src_datetimeevents src -- de
+    @etl_project.@etl_dataset.src_datetimeevents src
 INNER JOIN
-    @etl_project.@etl_dataset.src_patients pat
-        ON  pat.subject_id = src.subject_id
-WHERE
-    EXTRACT(YEAR FROM src.value) >= pat.anchor_year - pat.anchor_year
+    @etl_project.@etl_dataset.src_d_items d_items
+        ON src.itemid = d_items.itemid
 ;
 
-
--- -------------------------------------------------------------------
--- mapping
--- HCPCS Rule 1
--- add more custom mapping for CPT4 if needed
--- -------------------------------------------------------------------
-
-CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_hcpcs_concept AS
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_proc_d_items_clean AS
 SELECT
-    vc.concept_code         AS source_code,
-    vc.vocabulary_id        AS source_vocabulary_id,    
-    vc.domain_id            AS source_domain_id,
-    vc.concept_id           AS source_concept_id,
-    vc2.domain_id           AS target_domain_id,
-    vc2.concept_id          AS target_concept_id
+    src.subject_id                      AS subject_id,
+    src.hadm_id                         AS hadm_id,
+    src.start_datetime                  AS start_datetime,
+    src.itemid                          AS itemid,
+    src.source_code                     AS source_code,
+    src.source_label                    AS source_label,
+    src.quantity                        AS quantity,
+    'MIMIC4'                            AS source_vocabulary_id,
+    'm4_proc_itemid'                    AS source_concept_class_id,
+    src.unit_id                         AS unit_id,
+    src.load_table_id                   AS load_table_id,
+    src.load_row_id                     AS load_row_id,
+    src.trace_id                        AS trace_id
+FROM @etl_project.@etl_dataset.lk_proc_event_clean src
+UNION ALL
+SELECT
+    src.subject_id                      AS subject_id,
+    src.hadm_id                         AS hadm_id,
+    src.start_datetime                  AS start_datetime,
+    src.itemid                          AS itemid,
+    src.source_code                     AS source_code,
+    src.source_label                    AS source_label,
+    src.quantity                        AS quantity,
+    'MIMIC4'                            AS source_vocabulary_id,
+    'm4_datetime_item'                  AS source_concept_class_id,
+    src.unit_id                         AS unit_id,
+    src.load_table_id                   AS load_table_id,
+    src.load_row_id                     AS load_row_id,
+    src.trace_id                        AS trace_id
+FROM @etl_project.@etl_dataset.lk_datetimeevents_clean src
+;
+
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_proc_d_items_distinct AS
+SELECT DISTINCT
+    itemid,
+    source_code,
+    source_label,
+    source_vocabulary_id,
+    source_concept_class_id
 FROM
-    @etl_project.@etl_dataset.voc_concept vc
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
-WHERE
-    vc.vocabulary_id IN ('HCPCS', 'CPT4')
+    @etl_project.@etl_dataset.lk_proc_d_items_clean
 ;
 
 -- -------------------------------------------------------------------
--- mapping
--- ICD - Rule 2
+-- lk_icd_proc_concept
+-- Rule 2, ICD mapping
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_icd_proc_concept AS
 SELECT
-    REPLACE(vc.concept_code, '.', '')       AS source_code,
+    vc.concept_code                         AS source_code,
     vc.vocabulary_id                        AS source_vocabulary_id,
     vc.domain_id                            AS source_domain_id,
     vc.concept_id                           AS source_concept_id,
@@ -199,27 +216,147 @@ WHERE
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_itemid_concept AS
+WITH code_match AS (
+    SELECT
+        src.itemid                      AS itemid,
+        src.source_code                 AS source_code,
+        src.source_label                AS source_label,
+        src.source_vocabulary_id        AS source_vocabulary_id,
+        src.source_concept_class_id     AS source_concept_class_id,
+        vc.domain_id                    AS source_domain_id,
+        vc.concept_id                   AS source_concept_id,
+        vc.concept_name                 AS source_concept_name
+    FROM
+        @etl_project.@etl_dataset.lk_proc_d_items_distinct src
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON vc.concept_code = src.source_code
+            AND vc.vocabulary_id = src.source_vocabulary_id
+            AND vc.concept_class_id = src.source_concept_class_id
+),
+name_match AS (
+    SELECT
+        cm.itemid                   AS itemid,
+        cm.source_code              AS source_code,
+        cm.source_label             AS source_label,
+        cm.source_vocabulary_id     AS source_vocabulary_id,
+        cm.source_concept_class_id  AS source_concept_class_id,
+        COALESCE(cm.source_domain_id, vc.domain_id)        AS source_domain_id,
+        COALESCE(cm.source_concept_id, vc.concept_id)      AS source_concept_id,
+        COALESCE(cm.source_concept_name, vc.concept_name)  AS source_concept_name
+    FROM
+        code_match cm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON cm.source_concept_id IS NULL
+            AND cm.source_label = vc.concept_name
+            AND vc.vocabulary_id = cm.source_vocabulary_id
+            AND vc.concept_class_id = cm.source_concept_class_id
+    WHERE
+        cm.source_concept_id IS NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM code_match prior
+            WHERE prior.source_code = cm.source_code
+              AND prior.source_vocabulary_id = cm.source_vocabulary_id
+              AND prior.source_concept_class_id = cm.source_concept_class_id
+              AND prior.source_concept_id IS NOT NULL
+        )
+),
+synonym_match AS (
+    SELECT
+        cm.itemid                   AS itemid,
+        cm.source_code              AS source_code,
+        cm.source_label             AS source_label,
+        cm.source_vocabulary_id     AS source_vocabulary_id,
+        cm.source_concept_class_id  AS source_concept_class_id,
+        COALESCE(cm.source_domain_id, vc.domain_id)        AS source_domain_id,
+        COALESCE(cm.source_concept_id, vc.concept_id)      AS source_concept_id,
+        COALESCE(cm.source_concept_name, vc.concept_name)  AS source_concept_name
+    FROM
+        code_match cm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_synonym vcs
+            ON cm.source_concept_id IS NULL
+            AND cm.source_label = vcs.concept_synonym_name
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON vcs.concept_id = vc.concept_id
+            AND vc.vocabulary_id = cm.source_vocabulary_id
+            AND vc.concept_class_id = cm.source_concept_class_id
+    WHERE
+        cm.source_concept_id IS NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM code_match prior
+            WHERE prior.source_code = cm.source_code
+              AND prior.source_vocabulary_id = cm.source_vocabulary_id
+              AND prior.source_concept_class_id = cm.source_concept_class_id
+              AND prior.source_concept_id IS NOT NULL
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM name_match prior
+            WHERE prior.source_code = cm.source_code
+              AND prior.source_vocabulary_id = cm.source_vocabulary_id
+              AND prior.source_concept_class_id = cm.source_concept_class_id
+              AND prior.source_concept_id IS NOT NULL
+        )
+),
+unmapped_fallback AS (
+    SELECT
+                src.itemid                     AS itemid,
+                src.source_code                AS source_code,
+                src.source_label               AS source_label,
+                src.source_vocabulary_id       AS source_vocabulary_id,
+                src.source_concept_class_id    AS source_concept_class_id,
+        CAST(NULL AS STRING)           AS source_domain_id,
+        CAST(NULL AS INT64)            AS source_concept_id,
+        CAST(NULL AS STRING)           AS target_domain_id,
+        CAST(NULL AS INT64)            AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_proc_d_items_distinct src
+    WHERE
+        NOT EXISTS (
+            SELECT 1
+            FROM code_match cm
+            WHERE cm.itemid = src.itemid
+              AND cm.source_vocabulary_id = src.source_vocabulary_id
+              AND cm.source_concept_class_id = src.source_concept_class_id
+              AND cm.source_concept_id IS NOT NULL
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM name_match nm
+            WHERE nm.itemid = src.itemid
+              AND nm.source_vocabulary_id = src.source_vocabulary_id
+              AND nm.source_concept_class_id = src.source_concept_class_id
+              AND nm.source_concept_id IS NOT NULL
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM synonym_match sm
+            WHERE sm.itemid = src.itemid
+              AND sm.source_vocabulary_id = src.source_vocabulary_id
+              AND sm.source_concept_class_id = src.source_concept_class_id
+              AND sm.source_concept_id IS NOT NULL
+        )
+)
 SELECT
-    d_items.itemid                      AS itemid,
-    CAST(d_items.itemid AS STRING)      AS source_code,
-    d_items.label                       AS source_label,
-    vc.vocabulary_id                    AS source_vocabulary_id,
-    vc.domain_id                        AS source_domain_id,
-    vc.concept_id                       AS source_concept_id,
+    cm.itemid                           AS itemid,
+    cm.source_code                      AS source_code,
+    cm.source_label                     AS source_label,
+    cm.source_vocabulary_id             AS source_vocabulary_id,
+    cm.source_concept_class_id          AS source_concept_class_id,
+    cm.source_domain_id                 AS source_domain_id,
+    cm.source_concept_id                AS source_concept_id,
     vc2.domain_id                       AS target_domain_id,
     vc2.concept_id                      AS target_concept_id
 FROM
-    @etl_project.@etl_dataset.src_d_items d_items
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON vc.concept_code = CAST(d_items.itemid AS STRING)
-        AND vc.vocabulary_id IN (
-            'mimiciv_proc_itemid',
-            'mimiciv_proc_datetimeevents'
-        )
+    code_match cm
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1
+        ON  cm.source_concept_id = vcr.concept_id_1
         AND vcr.relationship_id = 'Maps to'
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept vc2
@@ -227,10 +364,64 @@ LEFT JOIN
         AND vc2.standard_concept = 'S'
         AND vc2.invalid_reason IS NULL
 WHERE
-    d_items.linksto IN (
-        'procedureevents',
-        'datetimeevents'
-    )
+    cm.source_concept_id IS NOT NULL
+UNION ALL
+SELECT
+    nm.itemid                           AS itemid,
+    nm.source_code                      AS source_code,
+    nm.source_label                     AS source_label,
+    nm.source_vocabulary_id             AS source_vocabulary_id,
+    nm.source_concept_class_id          AS source_concept_class_id,
+    nm.source_domain_id                 AS source_domain_id,
+    nm.source_concept_id                AS source_concept_id,
+    vc2.domain_id                       AS target_domain_id,
+    vc2.concept_id                      AS target_concept_id
+FROM
+    name_match nm
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept_relationship vcr
+        ON  nm.source_concept_id = vcr.concept_id_1
+        AND vcr.relationship_id = 'Maps to'
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept vc2
+        ON vc2.concept_id = vcr.concept_id_2
+        AND vc2.standard_concept = 'S'
+        AND vc2.invalid_reason IS NULL
+UNION ALL
+SELECT
+    sm.itemid                           AS itemid,
+    sm.source_code                      AS source_code,
+    sm.source_label                     AS source_label,
+    sm.source_vocabulary_id             AS source_vocabulary_id,
+    sm.source_concept_class_id          AS source_concept_class_id,
+    sm.source_domain_id                 AS source_domain_id,
+    sm.source_concept_id                AS source_concept_id,
+    vc2.domain_id                       AS target_domain_id,
+    vc2.concept_id                      AS target_concept_id
+FROM
+    synonym_match sm
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept_relationship vcr
+        ON  sm.source_concept_id = vcr.concept_id_1
+        AND vcr.relationship_id = 'Maps to'
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept vc2
+        ON vc2.concept_id = vcr.concept_id_2
+        AND vc2.standard_concept = 'S'
+        AND vc2.invalid_reason IS NULL
+UNION ALL
+SELECT
+    uf.itemid                           AS itemid,
+    uf.source_code                      AS source_code,
+    uf.source_label                     AS source_label,
+    uf.source_vocabulary_id             AS source_vocabulary_id,
+    uf.source_concept_class_id          AS source_concept_class_id,
+    uf.source_domain_id                 AS source_domain_id,
+    uf.source_concept_id                AS source_concept_id,
+    uf.target_domain_id                 AS target_domain_id,
+    uf.target_concept_id                AS target_concept_id
+FROM
+    unmapped_fallback uf
 ;
 
 -- -------------------------------------------------------------------
@@ -306,9 +497,9 @@ SELECT
     src.start_datetime                      AS start_datetime,
     32833                                   AS type_concept_id, -- OMOP4976906 EHR order
     src.quantity                            AS quantity,
-    lc.itemid                               AS itemid,
-    CAST(src.itemid AS STRING)              AS source_code,
-    lc.source_label                         AS source_label,
+    src.itemid                              AS itemid,
+    src.source_code                         AS source_code,
+    src.source_label                        AS source_label,
     lc.source_vocabulary_id                 AS source_vocabulary_id,
     lc.source_domain_id                     AS source_domain_id,
     COALESCE(lc.source_concept_id, 0)       AS source_concept_id,
@@ -324,5 +515,7 @@ FROM
 LEFT JOIN
     @etl_project.@etl_dataset.lk_itemid_concept lc
         ON src.itemid = lc.itemid
+        AND src.source_vocabulary_id = lc.source_vocabulary_id
+        AND src.source_concept_class_id = lc.source_concept_class_id
 ;
 

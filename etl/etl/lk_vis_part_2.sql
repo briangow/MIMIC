@@ -342,12 +342,12 @@ LEFT JOIN
         AND vc2.standard_concept = 'S'
         AND vc2.invalid_reason IS NULL
 WHERE
-    vc.vocabulary_id IN (
-        'mimiciv_vis_admission_location',   -- for admission_location_concept_id (visit and visit_detail)
-        'mimiciv_vis_discharge_location',   -- for discharge_location_concept_id 
-        'mimiciv_vis_service',              -- for admisstion_location_concept_id (visit_detail)
-                                            -- and for discharge_location_concept_id 
-        'mimiciv_vis_admission_type',       -- for visit_concept_id
-        'mimiciv_cs_place_of_service'       -- for visit_detail_concept_id
+    vc.vocabulary_id = 'MIMIC4'
+    AND vc.concept_class_id IN (
+        'm4_adm_location',
+        'm4_discharge_loc',
+        'm4_curr_service',
+        'm4_adm_type',
+        'm4_careunit'
     )
 ;

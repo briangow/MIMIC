@@ -48,6 +48,8 @@ SELECT
         WHEN src.icd_version = 10 THEN 'ICD10CM'
         ELSE NULL
     END                                         AS source_vocabulary_id,
+    'MIMIC4'                                    AS mimic_source_vocabulary_id,
+    'm4_icd_dx_code'                            AS mimic_source_concept_class_id,
     --
     'diagnoses_icd'         AS unit_id,
     src.load_table_id       AS load_table_id,
@@ -67,40 +69,119 @@ INNER JOIN
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_diagnoses_icd_mapped AS
+WITH standard_icd_match AS (
+    SELECT
+        src.subject_id                      AS subject_id,
+        src.hadm_id                         AS hadm_id,
+        src.seq_num                         AS seq_num,
+        src.start_datetime                  AS start_datetime,
+        src.end_datetime                    AS end_datetime,
+        32821                               AS type_concept_id,
+        src.source_code                     AS source_code,
+        src.source_vocabulary_id            AS source_vocabulary_id,
+        vc.concept_id                       AS source_concept_id,
+        vc.domain_id                        AS source_domain_id,
+        vc2.concept_id                      AS target_concept_id,
+        vc2.domain_id                       AS target_domain_id,
+        src.unit_id                         AS unit_id,
+        src.load_table_id                   AS load_table_id,
+        src.load_row_id                     AS load_row_id,
+        src.trace_id                        AS trace_id
+    FROM
+        @etl_project.@etl_dataset.lk_diagnoses_icd_clean src
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON REPLACE(vc.concept_code, '.', '') = REPLACE(TRIM(src.source_code), '.', '')
+            AND vc.vocabulary_id = src.source_vocabulary_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+),
+mimic_code_match AS (
+    SELECT
+        src.subject_id                      AS subject_id,
+        src.hadm_id                         AS hadm_id,
+        src.seq_num                         AS seq_num,
+        src.start_datetime                  AS start_datetime,
+        src.end_datetime                    AS end_datetime,
+        32821                               AS type_concept_id,
+        src.source_code                     AS source_code,
+        src.mimic_source_vocabulary_id      AS source_vocabulary_id,
+        vc.concept_id                       AS source_concept_id,
+        vc.domain_id                        AS source_domain_id,
+        vc2.concept_id                      AS target_concept_id,
+        vc2.domain_id                       AS target_domain_id,
+        src.unit_id                         AS unit_id,
+        src.load_table_id                   AS load_table_id,
+        src.load_row_id                     AS load_row_id,
+        src.trace_id                        AS trace_id
+    FROM
+        @etl_project.@etl_dataset.lk_diagnoses_icd_clean src
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON REPLACE(vc.concept_code, '.', '') = REPLACE(TRIM(src.source_code), '.', '')
+            AND vc.vocabulary_id = src.mimic_source_vocabulary_id
+            AND vc.concept_class_id = src.mimic_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM standard_icd_match sim
+        WHERE sim.source_code = src.source_code
+          AND sim.source_vocabulary_id = src.source_vocabulary_id
+          AND sim.source_concept_id IS NOT NULL
+    )
+)
 SELECT
     src.subject_id                      AS subject_id,
     src.hadm_id                         AS hadm_id,
     src.seq_num                         AS seq_num,
     src.start_datetime                  AS start_datetime,
     src.end_datetime                    AS end_datetime,
-    32821                               AS type_concept_id, -- OMOP4976894 EHR billing record
-    --
+    src.type_concept_id                 AS type_concept_id,
     src.source_code                     AS source_code,
     src.source_vocabulary_id            AS source_vocabulary_id,
-    vc.concept_id                       AS source_concept_id,
-    vc.domain_id                        AS source_domain_id,
-    vc2.concept_id                      AS target_concept_id,
-    vc2.domain_id                       AS target_domain_id,
-    --
-    CONCAT('cond.', src.unit_id) AS unit_id,
-    src.load_table_id       AS load_table_id,
-    src.load_row_id         AS load_row_id,
-    src.trace_id            AS trace_id  
-FROM
-    @etl_project.@etl_dataset.lk_diagnoses_icd_clean src
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON REPLACE(vc.concept_code, '.', '') = REPLACE(TRIM(src.source_code), '.', '')
-        AND vc.vocabulary_id = src.source_vocabulary_id
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
+    src.source_concept_id               AS source_concept_id,
+    src.source_domain_id                AS source_domain_id,
+    src.target_concept_id               AS target_concept_id,
+    src.target_domain_id                AS target_domain_id,
+    CONCAT('cond.', src.unit_id)        AS unit_id,
+    src.load_table_id                   AS load_table_id,
+    src.load_row_id                     AS load_row_id,
+    src.trace_id                        AS trace_id
+FROM standard_icd_match src
+UNION ALL
+SELECT
+    src.subject_id                      AS subject_id,
+    src.hadm_id                         AS hadm_id,
+    src.seq_num                         AS seq_num,
+    src.start_datetime                  AS start_datetime,
+    src.end_datetime                    AS end_datetime,
+    src.type_concept_id                 AS type_concept_id,
+    src.source_code                     AS source_code,
+    src.source_vocabulary_id            AS source_vocabulary_id,
+    src.source_concept_id               AS source_concept_id,
+    src.source_domain_id                AS source_domain_id,
+    src.target_concept_id               AS target_concept_id,
+    src.target_domain_id                AS target_domain_id,
+    CONCAT('cond.', src.unit_id)        AS unit_id,
+    src.load_table_id                   AS load_table_id,
+    src.load_row_id                     AS load_row_id,
+    src.trace_id                        AS trace_id
+FROM mimic_code_match src
 ;
 
 -- -------------------------------------------------------------------

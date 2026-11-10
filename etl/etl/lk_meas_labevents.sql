@@ -29,6 +29,8 @@
 --      see a possibility to use 'Maps to value'
 -- custom mapping:
 --      fallback custom MIMIC lab-item mapping from combined Athena + _delta vocabulary content
+--      itemid/code matching appears to recover nearly all useful custom lab-item mappings;
+--      text fallback on label|fluid|category is retained as a limited backstop but contributes little
 -- -------------------------------------------------------------------
 
 -- -------------------------------------------------------------------
@@ -52,8 +54,12 @@ SELECT
     CONCAT(dlab.label, '|', dlab.fluid, '|', dlab.category)     AS source_label, -- for the crosswalk table
     IF(dlab.loinc_code IS NOT NULL, 
         'LOINC', 
-        'mimiciv_meas_lab_loinc'
+        'MIMIC4'
     )                                                           AS source_vocabulary_id
+    ,IF(dlab.loinc_code IS NOT NULL,
+        CAST(NULL AS STRING),
+        'm4_lab_itemid'
+    )                                                           AS source_concept_class_id
 FROM
     @etl_project.@etl_dataset.src_d_labitems dlab
 ;
@@ -94,38 +100,186 @@ INNER JOIN
 -- all dlab.itemid, all available concepts from LOINC and fallback custom MIMIC lab-item mapping
 -- -------------------------------------------------------------------
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_meas_d_labitems_concept AS
-SELECT
-    dlab.itemid                 AS itemid,
-    dlab.source_code            AS source_code,
-    dlab.loinc_code             AS loinc_code,
-    dlab.source_label           AS source_label,
-    dlab.source_vocabulary_id   AS source_vocabulary_id,
-    -- source concept
-    vc.domain_id                AS source_domain_id,
-    vc.concept_id               AS source_concept_id,
-    vc.concept_name             AS source_concept_name,
-    -- target concept
-    vc2.vocabulary_id           AS target_vocabulary_id,
-    vc2.domain_id               AS target_domain_id,
-    vc2.concept_id              AS target_concept_id,
-    vc2.concept_name            AS target_concept_name,
-    vc2.standard_concept        AS target_standard_concept
-FROM
-    @etl_project.@etl_dataset.lk_meas_d_labitems_clean dlab
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON  vc.concept_code = dlab.source_code -- join 
-        AND vc.vocabulary_id = dlab.source_vocabulary_id
-        -- AND vc.domain_id = 'Measurement'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
+WITH code_match AS (
+    SELECT
+        dlab.itemid                 AS itemid,
+        dlab.source_code            AS source_code,
+        dlab.loinc_code             AS loinc_code,
+        dlab.source_label           AS source_label,
+        dlab.source_vocabulary_id   AS source_vocabulary_id,
+        -- source concept
+        vc.domain_id                AS source_domain_id,
+        vc.concept_id               AS source_concept_id,
+        vc.concept_name             AS source_concept_name,
+        -- target concept
+        vc2.vocabulary_id           AS target_vocabulary_id,
+        vc2.domain_id               AS target_domain_id,
+        vc2.concept_id              AS target_concept_id,
+        vc2.concept_name            AS target_concept_name,
+        vc2.standard_concept        AS target_standard_concept
+    FROM
+        @etl_project.@etl_dataset.lk_meas_d_labitems_clean dlab
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON vc.concept_code = dlab.source_code
+            AND vc.vocabulary_id = dlab.source_vocabulary_id
+            AND (
+                dlab.source_vocabulary_id = 'LOINC'
+                OR vc.concept_class_id = dlab.source_concept_class_id
+            )
+            AND (
+                dlab.source_vocabulary_id = 'LOINC'
+                OR vc.domain_id IN ('Measurement', 'Undefined')
+            )
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE
+        vc.concept_id IS NOT NULL
+),
+name_match AS (
+    SELECT
+        dlab.itemid                 AS itemid,
+        dlab.source_code            AS source_code,
+        dlab.loinc_code             AS loinc_code,
+        dlab.source_label           AS source_label,
+        dlab.source_vocabulary_id   AS source_vocabulary_id,
+        -- source concept
+        vc.domain_id                AS source_domain_id,
+        vc.concept_id               AS source_concept_id,
+        vc.concept_name             AS source_concept_name,
+        -- target concept
+        vc2.vocabulary_id           AS target_vocabulary_id,
+        vc2.domain_id               AS target_domain_id,
+        vc2.concept_id              AS target_concept_id,
+        vc2.concept_name            AS target_concept_name,
+        vc2.standard_concept        AS target_standard_concept
+    FROM
+        @etl_project.@etl_dataset.lk_meas_d_labitems_clean dlab
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON dlab.loinc_code IS NULL
+            AND dlab.source_label = vc.concept_name
+            AND vc.vocabulary_id = dlab.source_vocabulary_id
+            AND vc.concept_class_id = dlab.source_concept_class_id
+            AND vc.domain_id IN ('Measurement', 'Undefined')
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE
+        vc.concept_id IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM code_match cm
+            WHERE cm.itemid = dlab.itemid
+        )
+),
+synonym_match AS (
+    SELECT
+        dlab.itemid                 AS itemid,
+        dlab.source_code            AS source_code,
+        dlab.loinc_code             AS loinc_code,
+        dlab.source_label           AS source_label,
+        dlab.source_vocabulary_id   AS source_vocabulary_id,
+        -- source concept
+        vc.domain_id                AS source_domain_id,
+        vc.concept_id               AS source_concept_id,
+        vc.concept_name             AS source_concept_name,
+        -- target concept
+        vc2.vocabulary_id           AS target_vocabulary_id,
+        vc2.domain_id               AS target_domain_id,
+        vc2.concept_id              AS target_concept_id,
+        vc2.concept_name            AS target_concept_name,
+        vc2.standard_concept        AS target_standard_concept
+    FROM
+        @etl_project.@etl_dataset.lk_meas_d_labitems_clean dlab
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_synonym vcs
+            ON dlab.loinc_code IS NULL
+            AND dlab.source_label = vcs.concept_synonym_name
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON vc.concept_id = vcs.concept_id
+            AND vc.vocabulary_id = dlab.source_vocabulary_id
+            AND vc.concept_class_id = dlab.source_concept_class_id
+            AND vc.domain_id IN ('Measurement', 'Undefined')
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE
+        vc.concept_id IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM code_match cm
+            WHERE cm.itemid = dlab.itemid
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM name_match nm
+            WHERE nm.itemid = dlab.itemid
+        )
+),
+unmapped_fallback AS (
+    -- Preserve source lab rows even when vocabulary resolution fails.
+    -- This matches prior ETL retention semantics: missing concept mappings should
+    -- leave concept fields null rather than dropping the source itemid entirely.
+    SELECT
+        dlab.itemid                 AS itemid,
+        dlab.source_code            AS source_code,
+        dlab.loinc_code             AS loinc_code,
+        dlab.source_label           AS source_label,
+        dlab.source_vocabulary_id   AS source_vocabulary_id,
+        CAST(NULL AS STRING)        AS source_domain_id,
+        CAST(NULL AS INT64)         AS source_concept_id,
+        CAST(NULL AS STRING)        AS source_concept_name,
+        CAST(NULL AS STRING)        AS target_vocabulary_id,
+        CAST(NULL AS STRING)        AS target_domain_id,
+        CAST(NULL AS INT64)         AS target_concept_id,
+        CAST(NULL AS STRING)        AS target_concept_name,
+        CAST(NULL AS STRING)        AS target_standard_concept
+    FROM
+        @etl_project.@etl_dataset.lk_meas_d_labitems_clean dlab
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.itemid = dlab.itemid
+    )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM name_match nm
+        WHERE nm.itemid = dlab.itemid
+    )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM synonym_match sm
+        WHERE sm.itemid = dlab.itemid
+    )
+)
+SELECT * FROM code_match
+UNION ALL
+SELECT * FROM name_match
+UNION ALL
+SELECT * FROM synonym_match
+UNION ALL
+SELECT * FROM unmapped_fallback
 ;
 
 -- -------------------------------------------------------------------

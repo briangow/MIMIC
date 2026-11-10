@@ -158,16 +158,28 @@ CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_d_micro_clean AS
 SELECT
     dm.itemid                                       AS itemid,
     CAST(dm.itemid AS STRING)                       AS source_code,
+    CASE LOWER(dm.category)
+        WHEN 'specimen' THEN CONCAT('microbiologyevents.spec_itemid||', CAST(dm.itemid AS STRING))
+        ELSE CAST(NULL AS STRING)
+    END                                             AS alt_source_code,
     dm.label                                        AS source_label, -- for organism_mapped: test name plus specimen name
-    CONCAT('mimiciv_micro_', LOWER(dm.category))    AS source_vocabulary_id,
+    'MIMIC4'                                        AS source_vocabulary_id,
+    CASE LOWER(dm.category)
+        WHEN 'specimen' THEN 'm4_micro_spec'
+        WHEN 'microtest' THEN 'm4_micro_test'
+        WHEN 'organism' THEN 'm4_micro_org'
+        WHEN 'antibiotic' THEN 'm4_micro_ab'
+    END                                             AS source_concept_class_id,
 FROM
     @etl_project.@etl_dataset.src_d_micro dm
 UNION ALL
 SELECT DISTINCT
     CAST(NULL AS INT64)                             AS itemid,
     src.interpretation                              AS source_code,
+    CAST(NULL AS STRING)                            AS alt_source_code,
     src.interpretation                              AS source_label,
-    'mimiciv_micro_resistance'                      AS source_vocabulary_id
+    'MIMIC4'                                        AS source_vocabulary_id,
+    'm4_micro_interp'                               AS source_concept_class_id
 FROM
     @etl_project.@etl_dataset.lk_meas_ab_clean src
 WHERE
@@ -176,18 +188,161 @@ WHERE
 
 -- -------------------------------------------------------------------
 -- lk_d_micro_concept
+-- staged microbiology concept matching using MIMIC4 + concept_class_id
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_d_micro_concept AS
+WITH code_match AS (
+    SELECT
+        dm.itemid                   AS itemid,
+        dm.source_code              AS source_code,
+        dm.alt_source_code          AS alt_source_code,
+        dm.source_label             AS source_label,
+        dm.source_vocabulary_id     AS source_vocabulary_id,
+        dm.source_concept_class_id  AS source_concept_class_id,
+        vc.domain_id                AS source_domain_id,
+        vc.concept_id               AS source_concept_id,
+        vc.concept_name             AS source_concept_name
+    FROM
+        @etl_project.@etl_dataset.lk_d_micro_clean dm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON (dm.source_code = vc.concept_code OR dm.alt_source_code = vc.concept_code)
+            AND vc.vocabulary_id = dm.source_vocabulary_id
+            AND vc.concept_class_id = dm.source_concept_class_id
+),
+name_match AS (
+    SELECT
+        cm.itemid                   AS itemid,
+        cm.source_code              AS source_code,
+        cm.alt_source_code          AS alt_source_code,
+        cm.source_label             AS source_label,
+        cm.source_vocabulary_id     AS source_vocabulary_id,
+        cm.source_concept_class_id  AS source_concept_class_id,
+        COALESCE(cm.source_domain_id, vc.domain_id)            AS source_domain_id,
+        COALESCE(cm.source_concept_id, vc.concept_id)          AS source_concept_id,
+        COALESCE(cm.source_concept_name, vc.concept_name)      AS source_concept_name
+    FROM
+        code_match cm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON cm.itemid IS NOT NULL
+            AND cm.source_concept_id IS NULL
+            AND cm.source_label = vc.concept_name
+            AND vc.vocabulary_id = cm.source_vocabulary_id
+            AND vc.concept_class_id = cm.source_concept_class_id
+    WHERE
+        cm.source_concept_id IS NULL
+        AND
+        vc.concept_id IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM code_match prior
+            WHERE prior.source_code = cm.source_code
+              AND prior.source_vocabulary_id = cm.source_vocabulary_id
+              AND prior.source_concept_class_id = cm.source_concept_class_id
+              AND prior.itemid IS NOT DISTINCT FROM cm.itemid
+        )
+),
+synonym_match AS (
+    SELECT
+        cm.itemid                   AS itemid,
+        cm.source_code              AS source_code,
+        cm.alt_source_code          AS alt_source_code,
+        cm.source_label             AS source_label,
+        cm.source_vocabulary_id     AS source_vocabulary_id,
+        cm.source_concept_class_id  AS source_concept_class_id,
+        COALESCE(cm.source_domain_id, vc.domain_id)            AS source_domain_id,
+        COALESCE(cm.source_concept_id, vc.concept_id)          AS source_concept_id,
+        COALESCE(cm.source_concept_name, vc.concept_name)      AS source_concept_name
+    FROM
+        code_match cm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_synonym vcs
+            ON cm.itemid IS NOT NULL
+            AND cm.source_concept_id IS NULL
+            AND cm.source_label = vcs.concept_synonym_name
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON vcs.concept_id = vc.concept_id
+            AND vc.vocabulary_id = cm.source_vocabulary_id
+            AND vc.concept_class_id = cm.source_concept_class_id
+    WHERE
+        cm.source_concept_id IS NULL
+        AND
+        vc.concept_id IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM code_match prior
+            WHERE prior.source_code = cm.source_code
+              AND prior.source_vocabulary_id = cm.source_vocabulary_id
+              AND prior.source_concept_class_id = cm.source_concept_class_id
+              AND prior.itemid IS NOT DISTINCT FROM cm.itemid
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM name_match prior
+            WHERE prior.source_code = cm.source_code
+              AND prior.source_vocabulary_id = cm.source_vocabulary_id
+              AND prior.source_concept_class_id = cm.source_concept_class_id
+              AND prior.itemid IS NOT DISTINCT FROM cm.itemid
+        )
+),
+unmapped_fallback AS (
+        -- Preserve microbiology source rows even when vocabulary resolution fails.
+        -- This keeps downstream specimen / organism events from disappearing solely
+        -- because a source concept or target mapping is unavailable.
+        SELECT
+                dm.itemid                   AS itemid,
+                dm.source_code              AS source_code,
+                dm.source_label             AS source_label,
+                dm.source_vocabulary_id     AS source_vocabulary_id,
+                dm.source_concept_class_id  AS source_concept_class_id,
+                CAST(NULL AS STRING)        AS source_domain_id,
+                CAST(NULL AS INT64)         AS source_concept_id,
+                CAST(NULL AS STRING)        AS source_concept_name,
+                CAST(NULL AS STRING)        AS target_vocabulary_id,
+                CAST(NULL AS STRING)        AS target_domain_id,
+                CAST(NULL AS INT64)         AS target_concept_id,
+                CAST(NULL AS STRING)        AS target_concept_name,
+                CAST(NULL AS STRING)        AS target_standard_concept
+        FROM
+                @etl_project.@etl_dataset.lk_d_micro_clean dm
+        WHERE NOT EXISTS (
+                SELECT 1
+                FROM code_match prior
+                WHERE prior.source_code = dm.source_code
+                    AND prior.source_vocabulary_id = dm.source_vocabulary_id
+                    AND prior.source_concept_class_id = dm.source_concept_class_id
+                    AND prior.itemid IS NOT DISTINCT FROM dm.itemid
+        )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM name_match prior
+                WHERE prior.source_code = dm.source_code
+                    AND prior.source_vocabulary_id = dm.source_vocabulary_id
+                    AND prior.source_concept_class_id = dm.source_concept_class_id
+                    AND prior.itemid IS NOT DISTINCT FROM dm.itemid
+        )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM synonym_match prior
+                WHERE prior.source_code = dm.source_code
+                    AND prior.source_vocabulary_id = dm.source_vocabulary_id
+                    AND prior.source_concept_class_id = dm.source_concept_class_id
+                    AND prior.itemid IS NOT DISTINCT FROM dm.itemid
+        )
+)
 SELECT
-    dm.itemid                   AS itemid,
-    dm.source_code              AS source_code, -- itemid
-    dm.source_label             AS source_label, -- symbolic information in case more mapping is required
-    dm.source_vocabulary_id     AS source_vocabulary_id,
+    cm.itemid                   AS itemid,
+    cm.source_code              AS source_code, -- itemid
+    cm.source_label             AS source_label, -- symbolic information in case more mapping is required
+    cm.source_vocabulary_id     AS source_vocabulary_id,
+    cm.source_concept_class_id  AS source_concept_class_id,
     -- source_concept
-    vc.domain_id                AS source_domain_id,
-    vc.concept_id               AS source_concept_id,
-    vc.concept_name             AS source_concept_name,
+    cm.source_domain_id         AS source_domain_id,
+    cm.source_concept_id        AS source_concept_id,
+    cm.source_concept_name      AS source_concept_name,
     -- target concept
     vc2.vocabulary_id           AS target_vocabulary_id,
     vc2.domain_id               AS target_domain_id,
@@ -195,20 +350,91 @@ SELECT
     vc2.concept_name            AS target_concept_name,
     vc2.standard_concept        AS target_standard_concept
 FROM
-    @etl_project.@etl_dataset.lk_d_micro_clean dm
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON  dm.source_code = vc.concept_code
-        AND vc.vocabulary_id = dm.source_vocabulary_id
+    code_match cm
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1
+        ON  cm.source_concept_id = vcr.concept_id_1
         AND vcr.relationship_id = 'Maps to'
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept vc2
         ON vc2.concept_id = vcr.concept_id_2
         AND vc2.standard_concept = 'S'
         AND vc2.invalid_reason IS NULL
+WHERE
+    cm.source_concept_id IS NOT NULL
+UNION ALL
+SELECT
+    nm.itemid                   AS itemid,
+    nm.source_code              AS source_code, -- itemid
+    nm.source_label             AS source_label, -- symbolic information in case more mapping is required
+    nm.source_vocabulary_id     AS source_vocabulary_id,
+    nm.source_concept_class_id  AS source_concept_class_id,
+    -- source_concept
+    nm.source_domain_id         AS source_domain_id,
+    nm.source_concept_id        AS source_concept_id,
+    nm.source_concept_name      AS source_concept_name,
+    -- target concept
+    vc2.vocabulary_id           AS target_vocabulary_id,
+    vc2.domain_id               AS target_domain_id,
+    vc2.concept_id              AS target_concept_id,
+    vc2.concept_name            AS target_concept_name,
+    vc2.standard_concept        AS target_standard_concept
+FROM
+    name_match nm
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept_relationship vcr
+        ON  nm.source_concept_id = vcr.concept_id_1
+        AND vcr.relationship_id = 'Maps to'
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept vc2
+        ON vc2.concept_id = vcr.concept_id_2
+        AND vc2.standard_concept = 'S'
+        AND vc2.invalid_reason IS NULL
+UNION ALL
+SELECT
+    sm.itemid                   AS itemid,
+    sm.source_code              AS source_code, -- itemid
+    sm.source_label             AS source_label, -- symbolic information in case more mapping is required
+    sm.source_vocabulary_id     AS source_vocabulary_id,
+    sm.source_concept_class_id  AS source_concept_class_id,
+    -- source_concept
+    sm.source_domain_id         AS source_domain_id,
+    sm.source_concept_id        AS source_concept_id,
+    sm.source_concept_name      AS source_concept_name,
+    -- target concept
+    vc2.vocabulary_id           AS target_vocabulary_id,
+    vc2.domain_id               AS target_domain_id,
+    vc2.concept_id              AS target_concept_id,
+    vc2.concept_name            AS target_concept_name,
+    vc2.standard_concept        AS target_standard_concept
+FROM
+    synonym_match sm
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept_relationship vcr
+        ON  sm.source_concept_id = vcr.concept_id_1
+        AND vcr.relationship_id = 'Maps to'
+LEFT JOIN
+    @etl_project.@etl_dataset.voc_concept vc2
+        ON vc2.concept_id = vcr.concept_id_2
+        AND vc2.standard_concept = 'S'
+        AND vc2.invalid_reason IS NULL
+UNION ALL
+SELECT
+    uf.itemid                   AS itemid,
+    uf.source_code              AS source_code,
+    uf.source_label             AS source_label,
+    uf.source_vocabulary_id     AS source_vocabulary_id,
+    uf.source_concept_class_id  AS source_concept_class_id,
+    uf.source_domain_id         AS source_domain_id,
+    uf.source_concept_id        AS source_concept_id,
+    uf.source_concept_name      AS source_concept_name,
+    uf.target_vocabulary_id     AS target_vocabulary_id,
+    uf.target_domain_id         AS target_domain_id,
+    uf.target_concept_id        AS target_concept_id,
+    uf.target_concept_name      AS target_concept_name,
+    uf.target_standard_concept  AS target_standard_concept
+FROM
+    unmapped_fallback uf
 ;
 
 -- -------------------------------------------------------------------
@@ -331,7 +557,8 @@ INNER JOIN
 LEFT JOIN
     @etl_project.@etl_dataset.lk_d_micro_concept rc
         ON src.interpretation = rc.source_code
-        AND rc.source_vocabulary_id = 'mimiciv_micro_resistance' -- new vocab
+        AND rc.source_vocabulary_id = 'MIMIC4'
+        AND rc.source_concept_class_id = 'm4_micro_interp'
 LEFT JOIN
     @etl_project.@etl_dataset.lk_meas_operator_concept opc -- see lk_meas_labevents.sql
         ON src.dilution_comparison = opc.source_code
