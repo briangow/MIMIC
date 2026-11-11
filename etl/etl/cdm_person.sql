@@ -44,30 +44,110 @@ FROM
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pat_ethnicity_concept AS
-SELECT DISTINCT
-    src.ethnicity_first     AS source_code,
-    vc.concept_id           AS source_concept_id,
-    vc.vocabulary_id        AS source_vocabulary_id,
-    vc1.concept_id          AS target_concept_id,
-    vc1.vocabulary_id       AS target_vocabulary_id -- look here to distinguish Race and Ethnicity
-FROM
-    @etl_project.@etl_dataset.tmp_subject_ethnicity src
-LEFT JOIN
-    -- gcpt_ethnicity_to_concept -> mimiciv_per_ethnicity
-    @etl_project.@etl_dataset.voc_concept vc
-        ON UPPER(vc.concept_code) = UPPER(src.ethnicity_first) -- do the custom mapping
-        AND vc.domain_id IN ('Race', 'Ethnicity')
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship cr1
-        ON  cr1.concept_id_1 = vc.concept_id
-        AND cr1.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc1
-        ON  cr1.concept_id_2 = vc1.concept_id
-        AND vc1.invalid_reason IS NULL
-        AND vc1.standard_concept = 'S'
-WHERE
-    vc1.vocabulary_id <> 'Ethnicity'
+WITH code_match AS (
+    SELECT DISTINCT
+        src.ethnicity_first     AS source_code,
+        vc.concept_id           AS source_concept_id,
+        vc.vocabulary_id        AS source_vocabulary_id,
+        vc.domain_id            AS source_domain_id,
+        vc1.concept_id          AS target_concept_id,
+        vc1.vocabulary_id       AS target_vocabulary_id,
+        vc1.domain_id           AS target_domain_id
+    FROM
+        @etl_project.@etl_dataset.tmp_subject_ethnicity src
+    INNER JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON UPPER(vc.concept_code) = UPPER(src.ethnicity_first)
+            AND vc.vocabulary_id = 'MIMIC4'
+            AND vc.concept_class_id = 'm4_adm_race'
+            AND vc.domain_id IN ('Race', 'Ethnicity')
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship cr1
+            ON  cr1.concept_id_1 = vc.concept_id
+            AND cr1.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc1
+            ON  cr1.concept_id_2 = vc1.concept_id
+            AND vc1.invalid_reason IS NULL
+            AND vc1.standard_concept = 'S'
+),
+name_match AS (
+    SELECT DISTINCT
+        src.ethnicity_first     AS source_code,
+        vc.concept_id           AS source_concept_id,
+        vc.vocabulary_id        AS source_vocabulary_id,
+        vc.domain_id            AS source_domain_id,
+        vc1.concept_id          AS target_concept_id,
+        vc1.vocabulary_id       AS target_vocabulary_id,
+        vc1.domain_id           AS target_domain_id
+    FROM
+        @etl_project.@etl_dataset.tmp_subject_ethnicity src
+    INNER JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON UPPER(vc.concept_name) = UPPER(src.ethnicity_first)
+            AND vc.vocabulary_id = 'MIMIC4'
+            AND vc.concept_class_id = 'm4_adm_race'
+            AND vc.domain_id IN ('Race', 'Ethnicity')
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship cr1
+            ON  cr1.concept_id_1 = vc.concept_id
+            AND cr1.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc1
+            ON  cr1.concept_id_2 = vc1.concept_id
+            AND vc1.invalid_reason IS NULL
+            AND vc1.standard_concept = 'S'
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.source_code = src.ethnicity_first
+    )
+),
+synonym_match AS (
+    SELECT DISTINCT
+        src.ethnicity_first     AS source_code,
+        vc.concept_id           AS source_concept_id,
+        vc.vocabulary_id        AS source_vocabulary_id,
+        vc.domain_id            AS source_domain_id,
+        vc1.concept_id          AS target_concept_id,
+        vc1.vocabulary_id       AS target_vocabulary_id,
+        vc1.domain_id           AS target_domain_id
+    FROM
+        @etl_project.@etl_dataset.tmp_subject_ethnicity src
+    INNER JOIN
+        @etl_project.@etl_dataset.voc_concept_synonym vcs
+            ON UPPER(vcs.concept_synonym_name) = UPPER(src.ethnicity_first)
+    INNER JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_id = vcs.concept_id
+            AND vc.vocabulary_id = 'MIMIC4'
+            AND vc.concept_class_id = 'm4_adm_race'
+            AND vc.domain_id IN ('Race', 'Ethnicity')
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship cr1
+            ON  cr1.concept_id_1 = vc.concept_id
+            AND cr1.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc1
+            ON  cr1.concept_id_2 = vc1.concept_id
+            AND vc1.invalid_reason IS NULL
+            AND vc1.standard_concept = 'S'
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.source_code = src.ethnicity_first
+    )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM name_match nm
+        WHERE nm.source_code = src.ethnicity_first
+    )
+)
+SELECT * FROM code_match
+UNION ALL
+SELECT * FROM name_match
+UNION ALL
+SELECT * FROM synonym_match
 ;
 
 -- -------------------------------------------------------------------
@@ -115,16 +195,11 @@ SELECT
     CAST(NULL AS INT64)                                     AS month_of_birth,
     CAST(NULL AS INT64)                                     AS day_of_birth,
     CAST(NULL AS DATETIME)                                  AS birth_datetime,
-    -- NOTE: IS NOT NULL is being used to ignore the extra HISPANIC OR LATINO entry in lk_pat_ethnicity_concept - that
-    -- entry should be properly removed in a future build
-    COALESCE(
-        CASE
-            WHEN map_eth.target_vocabulary_id IS NOT NULL
-                THEN map_eth.target_concept_id
-            ELSE NULL
-        END, 0)                                             AS race_concept_id,
+    COALESCE(map_eth.target_concept_id, 0)                  AS race_concept_id,
     CASE
-        WHEN map_eth.source_code LIKE '%HISPANIC/LATINO%' OR map_eth.source_code LIKE '%HISPANIC OR LATINO%'
+        WHEN eth.ethnicity_first IS NULL
+            THEN 0
+        WHEN REGEXP_CONTAINS(UPPER(eth.ethnicity_first), r'HISPANIC OR LATINO|HISPANIC/LATINO')
             THEN 38003563
         ELSE 0
     END                                                     AS ethnicity_concept_id,
@@ -134,17 +209,8 @@ SELECT
     CAST(p.subject_id AS STRING)                            AS person_source_value,
     p.gender                                                AS gender_source_value,
     0                                                       AS gender_source_concept_id,
-    CASE
-        WHEN map_eth.target_vocabulary_id IS NOT NULL
-            THEN eth.ethnicity_first
-        ELSE NULL
-    END                                                     AS race_source_value,
-    COALESCE(
-        CASE
-            WHEN map_eth.target_vocabulary_id IS NOT NULL
-                THEN map_eth.source_concept_id
-            ELSE NULL
-        END, 0)                                             AS race_source_concept_id,
+    eth.ethnicity_first                                     AS race_source_value,
+    COALESCE(map_eth.source_concept_id, 0)                  AS race_source_concept_id,
     --
     eth.ethnicity_first                                     AS ethnicity_source_value,
     map_eth.source_concept_id                               AS ethnicity_source_concept_id,

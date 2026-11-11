@@ -39,7 +39,8 @@ SELECT
     src.starttime               AS start_datetime,
     COALESCE(src.stoptime, src.starttime) AS end_datetime,
     src.route                   AS route_source_code,
-    'mimiciv_drug_route'        AS route_source_vocabulary,
+    'MIMIC4'                    AS route_source_vocabulary,
+    'm4_rx_route'               AS route_source_concept_class_id,
     src.form_unit_disp          AS dose_unit_source_code,
     CAST(src.ndc AS STRING)     AS ndc_source_code,
     'NDC'                       AS ndc_source_vocabulary,
@@ -49,13 +50,14 @@ SELECT
     --     -- src.drug, src.drug_name_poe, src.drug_name_generic,'')
     --     src.drug, '')
     --     || ' ' || COALESCE(src.prod_strength, '')               
-        TRIM(COALESCE(
+    TRIM(COALESCE(
         IF(src.drug IN ('Bag', 'Vial', 'Syringe', 'Syringe.', 
                         'Syringe (Neonatal)', 'Syringe (Chemo)', 'Soln', 'Soln.',
                         'Sodium Chloride 0.9%  Flush'), 
             pharm.medication, src.drug), '') || 
                 ' ' || COALESCE(src.prod_strength, ''))  AS custom_source_code,
-            'mimiciv_drug_ndc'                          AS custom_source_vocabulary,
+    'MIMIC4'                                            AS custom_source_vocabulary,
+    'gcpt_drug_ndc'                                     AS custom_source_concept_class_id,
     src.pharmacy_id                             AS pharmacy_id,
     -- 
     'prescriptions'                 AS unit_id,
@@ -107,27 +109,104 @@ LEFT JOIN
 -- Rule 1
 -- -------------------------------------------------------------------
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pr_custom_concept AS
-SELECT DISTINCT
-    src.custom_source_code  AS source_code,
-    vc.domain_id            AS source_domain_id,
-    vc.concept_id           AS source_concept_id,
-    vc2.domain_id           AS target_domain_id,
-    vc2.concept_id          AS target_concept_id
-FROM
-    @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON  vc.concept_code = src.custom_source_code
-        AND vc.vocabulary_id = src.custom_source_vocabulary
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1 
-        and vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL --covers 71% of rxnorm standards concepts
+WITH code_match AS (
+    SELECT DISTINCT
+        src.custom_source_code  AS source_code,
+        vc.domain_id            AS source_domain_id,
+        vc.concept_id           AS source_concept_id,
+        vc2.domain_id           AS target_domain_id,
+        vc2.concept_id          AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_code = src.custom_source_code
+            AND vc.vocabulary_id = src.custom_source_vocabulary
+            AND vc.concept_class_id = src.custom_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+),
+name_match AS (
+    SELECT DISTINCT
+        src.custom_source_code  AS source_code,
+        vc.domain_id            AS source_domain_id,
+        vc.concept_id           AS source_concept_id,
+        vc2.domain_id           AS target_domain_id,
+        vc2.concept_id          AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_name = src.custom_source_code
+            AND vc.vocabulary_id = src.custom_source_vocabulary
+            AND vc.concept_class_id = src.custom_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.source_code = src.custom_source_code
+          AND cm.source_concept_id IS NOT NULL
+    )
+),
+synonym_match AS (
+    SELECT DISTINCT
+        src.custom_source_code  AS source_code,
+        vc.domain_id            AS source_domain_id,
+        vc.concept_id           AS source_concept_id,
+        vc2.domain_id           AS target_domain_id,
+        vc2.concept_id          AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_synonym vcs
+            ON vcs.concept_synonym_name = src.custom_source_code
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_id = vcs.concept_id
+            AND vc.vocabulary_id = src.custom_source_vocabulary
+            AND vc.concept_class_id = src.custom_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.source_code = src.custom_source_code
+          AND cm.source_concept_id IS NOT NULL
+    )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM name_match nm
+        WHERE nm.source_code = src.custom_source_code
+          AND nm.source_concept_id IS NOT NULL
+    )
+)
+SELECT * FROM code_match
+UNION ALL
+SELECT * FROM name_match
+UNION ALL
+SELECT * FROM synonym_match
 ;
 
 -- -------------------------------------------------------------------
@@ -135,27 +214,104 @@ LEFT JOIN
 -- Rule 1
 -- -------------------------------------------------------------------
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pr_route_concept AS
-SELECT DISTINCT
-    src.route_source_code   AS source_code,
-    vc.domain_id            AS source_domain_id,
-    vc.concept_id           AS source_concept_id,
-    vc2.domain_id           AS target_domain_id,
-    vc2.concept_id          AS target_concept_id
-FROM
-    @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc
-        ON  vc.concept_code = src.route_source_code
-        AND vc.vocabulary_id = src.route_source_vocabulary
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1 
-        and vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL --covers 71% of rxnorm standards concepts
+WITH code_match AS (
+    SELECT DISTINCT
+        src.route_source_code   AS source_code,
+        vc.domain_id            AS source_domain_id,
+        vc.concept_id           AS source_concept_id,
+        vc2.domain_id           AS target_domain_id,
+        vc2.concept_id          AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_code = src.route_source_code
+            AND vc.vocabulary_id = src.route_source_vocabulary
+            AND vc.concept_class_id = src.route_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+),
+name_match AS (
+    SELECT DISTINCT
+        src.route_source_code   AS source_code,
+        vc.domain_id            AS source_domain_id,
+        vc.concept_id           AS source_concept_id,
+        vc2.domain_id           AS target_domain_id,
+        vc2.concept_id          AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_name = src.route_source_code
+            AND vc.vocabulary_id = src.route_source_vocabulary
+            AND vc.concept_class_id = src.route_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.source_code = src.route_source_code
+          AND cm.source_concept_id IS NOT NULL
+    )
+),
+synonym_match AS (
+    SELECT DISTINCT
+        src.route_source_code   AS source_code,
+        vc.domain_id            AS source_domain_id,
+        vc.concept_id           AS source_concept_id,
+        vc2.domain_id           AS target_domain_id,
+        vc2.concept_id          AS target_concept_id
+    FROM
+        @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_synonym vcs
+            ON vcs.concept_synonym_name = src.route_source_code
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc
+            ON  vc.concept_id = vcs.concept_id
+            AND vc.vocabulary_id = src.route_source_vocabulary
+            AND vc.concept_class_id = src.route_source_concept_class_id
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code_match cm
+        WHERE cm.source_code = src.route_source_code
+          AND cm.source_concept_id IS NOT NULL
+    )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM name_match nm
+        WHERE nm.source_code = src.route_source_code
+          AND nm.source_concept_id IS NOT NULL
+    )
+)
+SELECT * FROM code_match
+UNION ALL
+SELECT * FROM name_match
+UNION ALL
+SELECT * FROM synonym_match
 ;
 
 -- -------------------------------------------------------------------
