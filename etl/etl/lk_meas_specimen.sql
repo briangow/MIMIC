@@ -13,18 +13,6 @@
 -- -------------------------------------------------------------------
 -- Known issues / Open points:
 --
--- microbiology custom mapping:
---      gcpt_microbiology_specimen_to_concept -> mimiciv_micro_specimen -- loaded
---          d_micro.label = mbe.spec_type_desc -> source_code
---      (gcpt) brand new vocab -> mimiciv_micro_microtest -- loaded
---          d_micro.label = mbe.test_name -> source_code
---      gcpt_org_name_to_concept -> mimiciv_micro_organism -- loaded
---          d_micro.label = mbe.org_name -> source_code
---      gcpt_atb_to_concept -> mimiciv_micro_antibiotic -- loaded
---          d_micro.label = mbe.ab_name -> source_code
---          https://athena.ohdsi.org/search-terms/terms?domain=Measurement&conceptClass=Lab+Test&page=1&pageSize=15&query=susceptibility 
---      (gcpt) brand new vocab -> mimiciv_micro_resistance -- loaded
---        src_microbiologyevents.interpretation -> source_code
 --
 -- -------------------------------------------------------------------
 
@@ -188,18 +176,6 @@ WHERE
 
 -- -------------------------------------------------------------------
 -- lk_d_micro_concept
---
---      gcpt_microbiology_specimen_to_concept -> mimiciv_micro_specimen
---          d_micro.label = mbe.spec_type_desc -> source_code
---      (gcpt) brand new vocab -> mimiciv_micro_microtest
---          d_micro.label = mbe.test_name -> source_code
---      gcpt_org_name_to_concept -> mimiciv_micro_organism
---          d_micro.label = mbe.org_name -> source_code
---      gcpt_atb_to_concept -> mimiciv_micro_antibiotic -- "susceptibility" Lab Test concepts
---          d_micro.label = mbe.ab_name -> source_code
---          https://athena.ohdsi.org/search-terms/terms?domain=Measurement&conceptClass=Lab+Test&page=1&pageSize=15&query=susceptibility 
---      (gcpt) brand new vocab -> mimiciv_micro_resistance -- loaded
---        src_microbiologyevents.interpretation -> source_code
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_d_micro_concept AS
@@ -223,10 +199,6 @@ FROM
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept vc
         ON  dm.source_code = vc.concept_code
-        -- gcpt_microbiology_specimen_to_concept -> mimiciv_micro_specimen
-        -- (gcpt) brand new vocab -> mimiciv_micro_test
-        -- gcpt_org_name_to_concept -> mimiciv_micro_organism
-        -- (gcpt) brand new vocab -> mimiciv_micro_resistance
         AND vc.vocabulary_id = dm.source_vocabulary_id
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept_relationship vcr

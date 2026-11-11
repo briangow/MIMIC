@@ -13,9 +13,6 @@
 -- -------------------------------------------------------------------
 -- Known issues / Open points:
 --
--- loaded custom mapping:
---      gcpt_route_to_concept                       -> mimiciv_drug_route
---      gcpt_prescriptions_ndcisnullzero_to_concept -> mimiciv_drug_ndc
 -- open points: 
 --      source table pharmacy - it is not here yet
 --      mimiciv_drug_ndc.concept_class_id = 'Prescription Drug' - is it right?
@@ -41,10 +38,10 @@ SELECT
     src.dose_val_rx             AS dose_val_rx,
     src.starttime               AS start_datetime,
     COALESCE(src.stoptime, src.starttime) AS end_datetime,
-    src.route                   AS route_source_code, --TODO: add route AS local concept,
+    src.route                   AS route_source_code,
     'mimiciv_drug_route'        AS route_source_vocabulary,
-    src.form_unit_disp          AS dose_unit_source_code, --TODO: add unit AS local concept,
-    CAST(src.ndc AS STRING)     AS ndc_source_code, -- ndc was used for automatic/manual mapping,
+    src.form_unit_disp          AS dose_unit_source_code,
+    CAST(src.ndc AS STRING)     AS ndc_source_code,
     'NDC'                       AS ndc_source_vocabulary,
     src.form_val_disp           AS form_val_disp,
     CAST(REGEXP_EXTRACT(src.form_val_disp, r'[-]?[\d]+[.]?[\d]*') AS FLOAT64)  AS quantity,
@@ -52,13 +49,13 @@ SELECT
     --     -- src.drug, src.drug_name_poe, src.drug_name_generic,'')
     --     src.drug, '')
     --     || ' ' || COALESCE(src.prod_strength, '')               
-    TRIM(COALESCE(
+        TRIM(COALESCE(
         IF(src.drug IN ('Bag', 'Vial', 'Syringe', 'Syringe.', 
                         'Syringe (Neonatal)', 'Syringe (Chemo)', 'Soln', 'Soln.',
                         'Sodium Chloride 0.9%  Flush'), 
             pharm.medication, src.drug), '') || 
-            ' ' || COALESCE(src.prod_strength, ''))  AS gcpt_source_code, -- medication/drug + prod_strength
-    'mimiciv_drug_ndc'                          AS gcpt_source_vocabulary, -- source_code = label
+                ' ' || COALESCE(src.prod_strength, ''))  AS custom_source_code,
+            'mimiciv_drug_ndc'                          AS custom_source_vocabulary,
     src.pharmacy_id                             AS pharmacy_id,
     -- 
     'prescriptions'                 AS unit_id,
@@ -92,8 +89,8 @@ FROM
     @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept vc
-        ON  vc.concept_code = src.ndc_source_code --this covers 85% of direct mapping but no standard
-        AND vc.vocabulary_id = src.ndc_source_vocabulary -- NDC
+        ON  vc.concept_code = src.ndc_source_code
+        AND vc.vocabulary_id = src.ndc_source_vocabulary
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept_relationship vcr
         ON  vc.concept_id = vcr.concept_id_1 
@@ -106,12 +103,12 @@ LEFT JOIN
 ;
 
 -- -------------------------------------------------------------------
--- lk_pr_gcpt_concept
+-- lk_pr_custom_concept
 -- Rule 1
 -- -------------------------------------------------------------------
-CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pr_gcpt_concept AS
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pr_custom_concept AS
 SELECT DISTINCT
-    src.gcpt_source_code    AS source_code,
+    src.custom_source_code  AS source_code,
     vc.domain_id            AS source_domain_id,
     vc.concept_id           AS source_concept_id,
     vc2.domain_id           AS target_domain_id,
@@ -120,8 +117,8 @@ FROM
     @etl_project.@etl_dataset.lk_prescriptions_clean src -- pr
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept vc
-        ON  vc.concept_code = src.gcpt_source_code
-        AND vc.vocabulary_id = src.gcpt_source_vocabulary -- mimiciv_drug_ndc
+        ON  vc.concept_code = src.custom_source_code
+        AND vc.vocabulary_id = src.custom_source_vocabulary
 LEFT JOIN
     @etl_project.@etl_dataset.voc_concept_relationship vcr
         ON  vc.concept_id = vcr.concept_id_1 
@@ -169,8 +166,8 @@ CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_drug_mapped AS
 SELECT
     src.hadm_id                                     AS hadm_id,
     src.subject_id                                  AS subject_id,
-    COALESCE(vc_ndc.target_concept_id, vc_gcpt.target_concept_id, 0)    AS target_concept_id,
-    COALESCE(vc_ndc.target_domain_id, vc_gcpt.target_domain_id, 'Drug') AS target_domain_id,
+    COALESCE(vc_ndc.target_concept_id, vc_custom.target_concept_id, 0)    AS target_concept_id,
+    COALESCE(vc_ndc.target_domain_id, vc_custom.target_domain_id, 'Drug') AS target_domain_id,
     src.start_datetime                                                  AS start_datetime,
     CASE
         WHEN src.end_datetime < src.start_datetime THEN src.start_datetime
@@ -179,8 +176,8 @@ SELECT
     32838                                           AS type_concept_id, -- OMOP4976911 EHR prescription
     src.quantity                                    AS quantity,
     COALESCE(vc_route.target_concept_id, 0)                             AS route_concept_id,
-    COALESCE(vc_ndc.source_code, vc_gcpt.source_code, src.gcpt_source_code) AS source_code,
-    COALESCE(vc_ndc.source_concept_id, vc_gcpt.source_concept_id, 0)    AS source_concept_id,
+    COALESCE(vc_ndc.source_code, vc_custom.source_code, src.custom_source_code) AS source_code,
+    COALESCE(vc_ndc.source_concept_id, vc_custom.source_concept_id, 0)    AS source_concept_id,
     src.route_source_code                                               AS route_source_code,
     src.dose_unit_source_code                       AS dose_unit_source_code,
     src.form_val_disp                               AS quantity_source_value,
@@ -197,9 +194,9 @@ LEFT JOIN
         ON  src.ndc_source_code = vc_ndc.source_code
         AND vc_ndc.target_concept_id IS NOT NULL
 LEFT JOIN
-    @etl_project.@etl_dataset.lk_pr_gcpt_concept vc_gcpt
-        ON  src.gcpt_source_code = vc_gcpt.source_code
-        AND vc_gcpt.target_concept_id IS NOT NULL
+    @etl_project.@etl_dataset.lk_pr_custom_concept vc_custom
+        ON  src.custom_source_code = vc_custom.source_code
+        AND vc_custom.target_concept_id IS NOT NULL
 LEFT JOIN
     @etl_project.@etl_dataset.lk_pr_route_concept vc_route
         ON src.route_source_code = vc_route.source_code

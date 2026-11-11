@@ -28,7 +28,7 @@
 --      see @etl_project.@etl_dataset.an_labevents_full
 --      see a possibility to use 'Maps to value'
 -- custom mapping:
---      gcpt_lab_label_to_concept -> mimiciv_meas_lab_loinc
+--      fallback custom MIMIC lab-item mapping from combined Athena + _delta vocabulary content
 -- -------------------------------------------------------------------
 
 -- -------------------------------------------------------------------
@@ -38,7 +38,7 @@
 
 -- -------------------------------------------------------------------
 -- lk_meas_d_labevents_clean
--- source label for custom mapping: label|fluid|category
+-- source label for custom MIMIC lab-item mapping: label|fluid|category
 -- source code to join vocabulary tables: coalesce(LOINC, itemid)
 -- source code represented in cdm tables: itemid
 -- -------------------------------------------------------------------
@@ -91,8 +91,7 @@ INNER JOIN
 
 -- -------------------------------------------------------------------
 -- lk_meas_d_labitems_concept
---  gcpt_lab_label_to_concept -> mimiciv_meas_lab_loinc
--- all dlab.itemid, all available concepts from LOINC and custom mapped dlab.label
+-- all dlab.itemid, all available concepts from LOINC and fallback custom MIMIC lab-item mapping
 -- -------------------------------------------------------------------
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_meas_d_labitems_concept AS
 SELECT

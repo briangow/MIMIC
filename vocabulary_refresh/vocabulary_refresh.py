@@ -1,7 +1,6 @@
 '''
     Refresh OMOP Vocabularies and Custom Concepts
 '''
-
 # ----------------------------------------------------
 '''
 These tables are kept after clean-up:
@@ -108,7 +107,6 @@ def read_config(config_file):
 # ----------------------------------------------------
 
 def main():
-
     gsutil_rm_csv = "gsutil rm {target_path}/*.csv"
     gsutil_cp_csv = "gsutil cp {source_path}/*.csv {target_path}/"
     dataset_fullname = "`{project}.{dataset}`"

@@ -1,68 +1,60 @@
 # README #
 
-###Refresh OMOP Vocabularies In A Single Script###
+### Refresh OMOP vocabularies with the workflow runner ###
 
-###Latest updates (recent first):###
+This folder now supports the repository workflow runner instead of the older
+`vocabulary_refresh.py -s10/-s20/-s30` flow.
 
-*2022-09-09*
+### Current workflow ###
 
-* MIMIC 2.0 is issued: run ETL on MIMIC 2.0.
-* bq_run_script.py is updated to fit current BQ requirement of single line queries
-* load_row_id is commented out in custom_vocabularies.sql to match standard vocabs loaded outside vocabulary_refresh
-* @bq_target_project and @bq_target_dataset are moved to "variables" section in vocabulary_refresh.conf
-* known issue: if a custom mapping csv is renamed, the old copy should be deleted from google storage bucket manually. Otherwise, there will be two mappings under old name and under the new.
+1. Create each BigQuery dataset that will participate in the workflow before running any DDL or upload step.
+  * Create the unified view dataset named by `@voc_project.@voc_dataset`.
+  * Create the Athena raw upload dataset if `@athena_dataset` will be used.
+  * Create each configured custom delta raw upload dataset such as `@custom_delta_dataset_1`, `@custom_delta_dataset_2`, etc.
+  * The uploader does not create datasets automatically; it only loads tables into datasets that already exist.
+2. Create empty vocabulary tables in each upload dataset by running `conf/workflow_vocab_upload_ddl.conf`.
+  The vocabulary table definitions come from `etl/ddl/ddl_voc_5_4_2.sql`.
+3. Configure the vocabulary source directories and per-source upload datasets in `vocabulary_refresh.conf`.
+4. Run `conf/workflow_vocabulary_refresh.conf` from the repository root to upload Athena and custom delta files and then rebuild the unified `voc_*` materialized views.
 
+### Configuration ###
 
-*2020-09-11*
+`vocabulary_refresh.conf` controls which local folders are loaded.
 
-* Put it into MIMIC IV to OMOP project
+* `view_project` and `view_dataset`
+  * target BigQuery project and dataset for the unified `voc_*` materialized views
+  * these normally match `@voc_project` and `@voc_dataset` from `conf/<env>.etlconf`
+* `athena_vocab_dir`
+  * local directory containing the Athena vocabulary extract
+  * leave empty to skip Athena loading
+* `athena_project` and `athena_dataset`
+  * upload target for the Athena raw vocabulary tables
+* `custom_delta_vocab_dir_1` ... `custom_delta_vocab_dir_4`
+  * optional local directories containing custom delta vocabulary CSV files
+  * only non-empty entries are loaded
+* `custom_delta_project_1` / `custom_delta_dataset_1` ... `custom_delta_project_4` / `custom_delta_dataset_4`
+  * upload targets for each custom delta source
+  * each configured directory should have a matching project and dataset
 
-###Usage:###
+### Run order ###
 
-#####To refresh standard vocabularies#####
+From the repository root:
 
-1. Download and unzip files from Athena (to a path known to vocabulary_refresh.py)
+```
+python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_ddl.conf
+python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_vocab_upload_ddl.conf
+python scripts/run_workflow.py -e conf/<env>.etlconf -c conf/workflow_vocabulary_refresh.conf
+```
 
-* set Athena local and gs path, target dataset and project name in vocabulary_refresh.conf
-    * run `python vocabulary_refresh.py -s10`
+Replace `<env>` with the environment config to use, such as `dev` or `full`.
 
-* alternatively, run step by step:
-    2. Copy files to GCP bucket
-        * gsutil cp <athena files location>/\*.csv gs://the_project_bucket/vocabulary_YYYY_MM_DD/
-    3. Load files to intermediate BQ tables
-        * load_to_bq_vocab.py (uncomment content of voc list)
-    4. Populate target vocabulary tables from intermediate tables
-        * create_voc_from_tmp.sql
+### Notes ###
 
-#####To refresh or add new custom mapping#####
-
-* set custom mapping CSV local and gs path, target dataset and project name in vocabulary_refresh.conf
-    * run `python vocabulary_refresh.py -s20`
-
-* alternatively, run step by step:
-    1. Copy custom mapping files to custom_mapping_csv/ folder, and update custom_mapping_list.tsv
-    2. Copy custom mapping files to GCP bucket
-        * gsutil cp custom_mapping_csv/\*.csv gs://some_path/CUSTOM_MAPPING/
-    3. Load files to the intermediate BQ table (tmp_custom_mapping)
-        * load_to_bq_vocab.py (uncomment value of custom_mapping_table variable)
-        * check_custom_loaded.sql
-    4. Add custom concepts to vocabulary tables from the intermediate table
-        * custom_vocabularies.sql
-
-#####Verify the result#####
-
-* set target dataset and project name in vocabulary_refresh.conf
-    * run `python vocabulary_refresh.py -s30`
-
-* alternatively, run step by step:
-    5. Verify target tables
-        * vocabulary_check_bq.sql
-    6. Clean up temporary tables from the previous step
-        * vocabulary_cleanup_bq.sql
-
-#####Comments#####
-
-* custom_mapping_list.tsv is populated manually, and is helpful to track custom vocabularies and custom concepts ranges in use.
-
-#####Tne End#####
+* `conf/workflow_vocabulary_refresh.conf` runs `vocabulary_refresh/upload_vocab_to_bq.py` and then `vocabulary_refresh/create_vocab_views.py`.
+* `conf/workflow_vocab_upload_ddl.conf` runs `vocabulary_refresh/run_vocab_upload_ddl.py`.
+* The BigQuery datasets must already exist before running `conf/workflow_vocab_upload_ddl.conf` or `conf/workflow_vocabulary_refresh.conf`.
+* The uploader loads supported OMOP vocabulary tables directly into the existing target tables for each configured source dataset.
+* Athena loading is optional.
+* Custom delta loading can be limited to a single folder or expanded to multiple folders by filling only the needed `custom_delta_vocab_dir_*` entries.
+* The unified `voc_*` materialized views are built in the view dataset and union Athena plus all configured custom delta datasets.
 
