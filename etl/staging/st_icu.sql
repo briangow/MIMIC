@@ -144,3 +144,38 @@ FROM
 JOIN @etl_project.@etl_dataset.hadm_ids_to_include h
 ON o.hadm_id = h.hadm_id
 ;
+
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.src_inputevents AS
+SELECT
+    subject_id                          AS subject_id,
+    i.hadm_id                           AS hadm_id,
+    stay_id                             AS stay_id,
+    starttime                           AS starttime,
+    endtime                             AS endtime,
+    storetime                           AS storetime,
+    itemid                              AS itemid,
+    amount                              AS amount,
+    amountuom                           AS amountuom,
+    rate                                AS rate,
+    rateuom                             AS rateuom,
+    ordercategoryname                   AS ordercategoryname,
+    ordercategorydescription            AS ordercategorydescription,
+    statusdescription                   AS statusdescription,
+    patientweight                       AS patientweight,
+    totalamount                         AS totalamount,
+    totalamountuom                      AS totalamountuom,
+    --
+    'inputevents'                       AS load_table_id,
+    FARM_FINGERPRINT(GENERATE_UUID())   AS load_row_id,
+    TO_JSON_STRING(STRUCT(
+        subject_id AS subject_id,
+        i.hadm_id AS hadm_id,
+        stay_id AS stay_id,
+        starttime AS starttime,
+        itemid AS itemid
+    ))                                  AS trace_id
+FROM
+    @source_project.@icu_dataset.inputevents i
+JOIN @etl_project.@etl_dataset.hadm_ids_to_include h
+ON i.hadm_id = h.hadm_id
+;
