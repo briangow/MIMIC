@@ -100,6 +100,90 @@ WHERE
 
 
 INSERT INTO @etl_project.@etl_dataset.device_exposure
+WITH inputevents_visit_detail_match AS (
+    SELECT
+        src.trace_id                            AS trace_id,
+        vd.visit_detail_id                      AS visit_detail_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY src.trace_id
+            ORDER BY vd.visit_detail_start_datetime, vd.visit_detail_id
+        )                                       AS row_num,
+        COUNT(*) OVER (
+            PARTITION BY src.trace_id
+        )                                       AS match_count
+    FROM
+        @etl_project.@etl_dataset.lk_inputevents_mapped src
+    INNER JOIN
+        @etl_project.@etl_dataset.person per
+            ON CAST(src.subject_id AS STRING) = per.person_source_value
+    INNER JOIN
+        @etl_project.@etl_dataset.visit_occurrence vis
+            ON vis.visit_source_value = CAST(src.hadm_id AS STRING)
+    LEFT JOIN
+        @etl_project.@etl_dataset.person_date_shift_lookup ds
+            ON per.person_id = ds.person_id
+    INNER JOIN
+        @etl_project.@etl_dataset.visit_detail vd
+            ON vd.person_id = per.person_id
+            AND vd.visit_occurrence_id = vis.visit_occurrence_id
+            AND DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) >= vd.visit_detail_start_datetime
+            AND DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) <= vd.visit_detail_end_datetime
+    WHERE
+        src.target_domain_id = 'Device'
+)
+SELECT
+    `@etl_project.@etl_dataset`.obf_id_str(src.trace_id, 32)    AS device_exposure_id,
+    per.person_id                                               AS person_id,
+    src.target_concept_id                                       AS device_concept_id,
+    DATE_ADD(CAST(src.start_datetime AS DATE), INTERVAL ds.offset_days DAY) AS device_exposure_start_date,
+    DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) AS device_exposure_start_datetime,
+    DATE_ADD(CAST(src.end_datetime AS DATE), INTERVAL ds.offset_days DAY) AS device_exposure_end_date,
+    DATETIME_ADD(src.end_datetime, INTERVAL ds.offset_days DAY) AS device_exposure_end_datetime,
+    src.type_concept_id                                         AS device_type_concept_id,
+    CAST(NULL AS STRING)                                        AS unique_device_id,
+    CAST(NULL AS STRING)                                        AS production_id,
+    CAST(
+        IF(ROUND(src.quantity) = src.quantity, src.quantity, NULL)
+        AS INT64)                                               AS quantity,
+    CAST(NULL AS INT64)                                         AS provider_id,
+    vis.visit_occurrence_id                                     AS visit_occurrence_id,
+    vdm.visit_detail_id                                         AS visit_detail_id,
+    src.source_code                                             AS device_source_value,
+    src.source_concept_id                                       AS device_source_concept_id,
+        src.unit_concept_id                                         AS unit_concept_id,
+        src.quantity_source_value                                   AS unit_source_value,
+    CAST(NULL AS INT64)                                         AS unit_source_concept_id,
+    -- 
+    CONCAT('device.', src.unit_id)                              AS unit_id,
+    src.load_table_id                                           AS load_table_id,
+    src.load_row_id                                             AS load_row_id,
+    src.trace_id                                                AS trace_id
+FROM
+    @etl_project.@etl_dataset.lk_inputevents_mapped src
+INNER JOIN
+    @etl_project.@etl_dataset.person per
+        ON CAST(src.subject_id AS STRING) = per.person_source_value
+INNER JOIN
+    @etl_project.@etl_dataset.visit_occurrence vis
+        ON vis.visit_source_value = CAST(src.hadm_id AS STRING)
+LEFT JOIN (
+    SELECT
+        trace_id,
+        visit_detail_id
+    FROM inputevents_visit_detail_match
+    WHERE row_num = 1
+      AND match_count = 1
+) vdm
+    ON src.trace_id = vdm.trace_id
+LEFT JOIN
+    @etl_project.@etl_dataset.person_date_shift_lookup ds
+        ON per.person_id = ds.person_id
+WHERE
+    src.target_domain_id = 'Device'
+;
+
+
+INSERT INTO @etl_project.@etl_dataset.device_exposure
 SELECT
     `@etl_project.@etl_dataset`.obf_id_str(src.trace_id, 32)    AS device_exposure_id,
     per.person_id                                               AS person_id,
