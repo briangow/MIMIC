@@ -282,6 +282,44 @@ UNION ALL
 SELECT * FROM unmapped_fallback
 ;
 
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_meas_d_labitems_concept_dedup AS
+SELECT
+    itemid,
+    source_code,
+    loinc_code,
+    source_label,
+    source_vocabulary_id,
+    source_domain_id,
+    source_concept_id,
+    source_concept_name,
+    target_vocabulary_id,
+    target_domain_id,
+    target_concept_id,
+    target_concept_name,
+    target_standard_concept
+FROM (
+    SELECT
+        src.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY src.itemid, src.source_code, src.source_vocabulary_id
+            ORDER BY
+                IF(src.target_concept_id IS NOT NULL, 0, 1),
+                IF(src.source_concept_id IS NOT NULL, 0, 1),
+                CASE
+                    WHEN src.loinc_code IS NOT NULL THEN 0
+                    WHEN src.source_concept_name = src.source_label THEN 1
+                    ELSE 2
+                END,
+                src.source_concept_id,
+                src.target_concept_id
+        ) AS row_num
+    FROM
+        @etl_project.@etl_dataset.lk_meas_d_labitems_concept src
+)
+WHERE
+    row_num = 1
+;
+
 -- -------------------------------------------------------------------
 -- lk_meas_labevents_hadm_id
 -- pick additional hadm_id by event start_datetime
@@ -343,7 +381,7 @@ SELECT
 FROM  
     @etl_project.@etl_dataset.lk_meas_labevents_clean src
 INNER JOIN 
-    @etl_project.@etl_dataset.lk_meas_d_labitems_concept labc
+    @etl_project.@etl_dataset.lk_meas_d_labitems_concept_dedup labc
         ON labc.itemid = src.itemid
 LEFT JOIN 
     @etl_project.@etl_dataset.lk_meas_operator_concept opc
