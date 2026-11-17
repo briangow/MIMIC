@@ -424,6 +424,40 @@ FROM
     unmapped_fallback uf
 ;
 
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_itemid_concept_dedup AS
+SELECT
+    itemid,
+    source_code,
+    source_label,
+    source_vocabulary_id,
+    source_concept_class_id,
+    source_domain_id,
+    source_concept_id,
+    target_domain_id,
+    target_concept_id
+FROM (
+    SELECT
+        src.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY src.itemid, src.source_code, src.source_vocabulary_id, src.source_concept_class_id
+            ORDER BY
+                IF(src.target_concept_id IS NOT NULL, 0, 1),
+                IF(src.source_concept_id IS NOT NULL, 0, 1),
+                CASE
+                    WHEN src.source_concept_id IS NOT NULL AND src.source_code = CAST(src.itemid AS STRING) THEN 0
+                    WHEN src.source_concept_id IS NOT NULL AND src.source_label IS NOT NULL THEN 1
+                    ELSE 2
+                END,
+                src.source_concept_id,
+                src.target_concept_id
+        ) AS row_num
+    FROM
+        @etl_project.@etl_dataset.lk_itemid_concept src
+)
+WHERE
+    row_num = 1
+;
+
 -- -------------------------------------------------------------------
 -- lk_procedure_mapped
 -- -------------------------------------------------------------------
@@ -513,7 +547,7 @@ SELECT
 FROM
     @etl_project.@etl_dataset.lk_proc_d_items_clean src
 LEFT JOIN
-    @etl_project.@etl_dataset.lk_itemid_concept lc
+    @etl_project.@etl_dataset.lk_itemid_concept_dedup lc
         ON src.itemid = lc.itemid
         AND src.source_vocabulary_id = lc.source_vocabulary_id
         AND src.source_concept_class_id = lc.source_concept_class_id

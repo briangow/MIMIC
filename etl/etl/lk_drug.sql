@@ -209,6 +209,31 @@ UNION ALL
 SELECT * FROM synonym_match
 ;
 
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pr_custom_concept_dedup AS
+SELECT
+    source_code,
+    source_domain_id,
+    source_concept_id,
+    target_domain_id,
+    target_concept_id
+FROM (
+    SELECT
+        src.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY src.source_code
+            ORDER BY
+                IF(src.target_concept_id IS NOT NULL, 0, 1),
+                IF(src.source_concept_id IS NOT NULL, 0, 1),
+                src.source_concept_id,
+                src.target_concept_id
+        ) AS row_num
+    FROM
+        @etl_project.@etl_dataset.lk_pr_custom_concept src
+)
+WHERE
+    row_num = 1
+;
+
 -- -------------------------------------------------------------------
 -- lk_pr_route_concept
 -- Rule 1
@@ -314,6 +339,31 @@ UNION ALL
 SELECT * FROM synonym_match
 ;
 
+CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_pr_route_concept_dedup AS
+SELECT
+    source_code,
+    source_domain_id,
+    source_concept_id,
+    target_domain_id,
+    target_concept_id
+FROM (
+    SELECT
+        src.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY src.source_code
+            ORDER BY
+                IF(src.target_concept_id IS NOT NULL, 0, 1),
+                IF(src.source_concept_id IS NOT NULL, 0, 1),
+                src.source_concept_id,
+                src.target_concept_id
+        ) AS row_num
+    FROM
+        @etl_project.@etl_dataset.lk_pr_route_concept src
+)
+WHERE
+    row_num = 1
+;
+
 -- -------------------------------------------------------------------
 -- lk_drug_mapped
 -- -------------------------------------------------------------------
@@ -350,11 +400,11 @@ LEFT JOIN
         ON  src.ndc_source_code = vc_ndc.source_code
         AND vc_ndc.target_concept_id IS NOT NULL
 LEFT JOIN
-    @etl_project.@etl_dataset.lk_pr_custom_concept vc_custom
+    @etl_project.@etl_dataset.lk_pr_custom_concept_dedup vc_custom
         ON  src.custom_source_code = vc_custom.source_code
         AND vc_custom.target_concept_id IS NOT NULL
 LEFT JOIN
-    @etl_project.@etl_dataset.lk_pr_route_concept vc_route
+    @etl_project.@etl_dataset.lk_pr_route_concept_dedup vc_route
         ON src.route_source_code = vc_route.source_code
         AND vc_route.target_concept_id IS NOT NULL
 ;

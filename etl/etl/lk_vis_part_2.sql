@@ -325,29 +325,45 @@ LEFT JOIN
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_visit_concept AS
-SELECT 
-    vc.concept_code     AS source_code,
-    vc.concept_id       AS source_concept_id,
-    vc2.concept_id      AS target_concept_id,
-    vc.vocabulary_id    AS source_vocabulary_id
-FROM 
-    @etl_project.@etl_dataset.voc_concept vc
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  vc.concept_id = vcr.concept_id_1 
-        and vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
+SELECT
+    source_code,
+    source_concept_id,
+    target_concept_id,
+    source_vocabulary_id
+FROM (
+    SELECT 
+        vc.concept_code     AS source_code,
+        vc.concept_id       AS source_concept_id,
+        vc2.concept_id      AS target_concept_id,
+        vc.vocabulary_id    AS source_vocabulary_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY vc.concept_code, vc.vocabulary_id
+            ORDER BY
+                IF(vc2.concept_id IS NOT NULL, 0, 1),
+                vc.concept_id,
+                vc2.concept_id
+        ) AS row_num
+    FROM 
+        @etl_project.@etl_dataset.voc_concept vc
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  vc.concept_id = vcr.concept_id_1 
+            and vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE
+        vc.vocabulary_id = 'MIMIC4'
+        AND vc.concept_class_id IN (
+            'm4_adm_location',
+            'm4_discharge_loc',
+            'm4_curr_service',
+            'm4_adm_type',
+            'm4_careunit'
+        )
+)
 WHERE
-    vc.vocabulary_id = 'MIMIC4'
-    AND vc.concept_class_id IN (
-        'm4_adm_location',
-        'm4_discharge_loc',
-        'm4_curr_service',
-        'm4_adm_type',
-        'm4_careunit'
-    )
+    row_num = 1
 ;
