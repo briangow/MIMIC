@@ -161,8 +161,8 @@ WHERE
 ;
 
 -- -------------------------------------------------------------------
--- Rule 3.1
--- Microbiology - organism
+-- Rule 3.3
+-- Microbiology - AST MIC / dilution measurements (parallel SOP-aligned build)
 -- -------------------------------------------------------------------
 
 INSERT INTO @etl_project.@etl_dataset.measurement
@@ -174,9 +174,9 @@ SELECT
     DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) AS measurement_datetime,
     CAST(NULL AS STRING)                    AS measurement_time,
     src.type_concept_id                     AS measurement_type_concept_id,
-    CAST(NULL AS INT64)                     AS operator_concept_id,
-    CAST(NULL AS FLOAT64)                   AS value_as_number,
-    COALESCE(src.value_as_concept_id, 0)    AS value_as_concept_id,
+    src.operator_concept_id                 AS operator_concept_id,
+    src.value_as_number                     AS value_as_number,
+    CAST(NULL AS INT64)                     AS value_as_concept_id,
     CAST(NULL AS INT64)                     AS unit_concept_id,
     CAST(NULL AS INT64)                     AS range_low,
     CAST(NULL AS INT64)                     AS range_high,
@@ -187,75 +187,23 @@ SELECT
     src.source_concept_id                   AS measurement_source_concept_id,
     CAST(NULL AS STRING)                    AS unit_source_value,
     src.value_source_value                  AS value_source_value,
-    CAST(NULL AS INT64)                     AS measurement_event_id,
-    CAST(NULL AS INT64)                     AS meas_event_field_concept_id,
-    --
+    src.episode_id                          AS measurement_event_id,
+    src.meas_event_field_concept_id         AS meas_event_field_concept_id,
     CONCAT('measurement.', src.unit_id)     AS unit_id,
-    src.load_table_id               AS load_table_id,
-    src.load_row_id                 AS load_row_id,
-    src.trace_id                    AS trace_id
-FROM  
-    @etl_project.@etl_dataset.lk_meas_organism_mapped src
+    src.load_table_id                       AS load_table_id,
+    src.load_row_id                         AS load_row_id,
+    src.trace_id                            AS trace_id
+FROM
+    @etl_project.@etl_dataset.lk_microbiology_measurement_ast src
 INNER JOIN
     @etl_project.@etl_dataset.person per
         ON CAST(src.subject_id AS STRING) = per.person_source_value
 INNER JOIN
     @etl_project.@etl_dataset.visit_occurrence vis
-        ON  vis.visit_source_value = CAST(src.hadm_id AS STRING)
+        ON vis.visit_source_value = CAST(src.hadm_id AS STRING)
 LEFT JOIN
     @etl_project.@etl_dataset.person_date_shift_lookup ds
         ON per.person_id = ds.person_id
-WHERE
-    src.target_domain_id = 'Measurement'
-;
-
--- -------------------------------------------------------------------
--- Rule 3.2
--- Microbiology - antibiotics
--- -------------------------------------------------------------------
-
-INSERT INTO @etl_project.@etl_dataset.measurement
-SELECT
-    src.measurement_id                      AS measurement_id,
-    per.person_id                           AS person_id,
-    COALESCE(src.target_concept_id, 0)      AS measurement_concept_id,
-    DATE_ADD(CAST(src.start_datetime AS DATE), INTERVAL ds.offset_days DAY) AS measurement_date,
-    DATETIME_ADD(src.start_datetime, INTERVAL ds.offset_days DAY) AS measurement_datetime,
-    CAST(NULL AS STRING)                    AS measurement_time,
-    src.type_concept_id                     AS measurement_type_concept_id,
-    src.operator_concept_id                 AS operator_concept_id, -- dilution comparison
-    src.value_as_number                     AS value_as_number, -- dilution value
-    COALESCE(src.value_as_concept_id, 0)    AS value_as_concept_id, -- resistance (interpretation)
-    CAST(NULL AS INT64)                     AS unit_concept_id,
-    CAST(NULL AS INT64)                     AS range_low,
-    CAST(NULL AS INT64)                     AS range_high,
-    CAST(NULL AS INT64)                     AS provider_id,
-    vis.visit_occurrence_id                 AS visit_occurrence_id,
-    CAST(NULL AS INT64)                     AS visit_detail_id,
-    src.source_code                         AS measurement_source_value, -- antibiotic name
-    src.source_concept_id                   AS measurement_source_concept_id,
-    CAST(NULL AS STRING)                    AS unit_source_value,
-    src.value_source_value                  AS value_source_value, -- resistance source value
-    CAST(NULL AS INT64)                     AS measurement_event_id,
-    CAST(NULL AS INT64)                     AS meas_event_field_concept_id,
-    --
-    CONCAT('measurement.', src.unit_id)     AS unit_id,
-    src.load_table_id               AS load_table_id,
-    src.load_row_id                 AS load_row_id,
-    src.trace_id                    AS trace_id
-FROM  
-    @etl_project.@etl_dataset.lk_meas_ab_mapped src
-INNER JOIN
-    @etl_project.@etl_dataset.person per
-        ON CAST(src.subject_id AS STRING) = per.person_source_value
-INNER JOIN
-    @etl_project.@etl_dataset.visit_occurrence vis
-        ON  vis.visit_source_value = CAST(src.hadm_id AS STRING)
-LEFT JOIN
-    @etl_project.@etl_dataset.person_date_shift_lookup ds
-        ON per.person_id = ds.person_id
-WHERE
-    src.target_domain_id = 'Measurement'
 ;
 
 -- -------------------------------------------------------------------

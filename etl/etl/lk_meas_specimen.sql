@@ -332,109 +332,166 @@ unmapped_fallback AS (
                     AND prior.source_concept_class_id = dm.source_concept_class_id
                     AND prior.itemid IS NOT DISTINCT FROM dm.itemid
         )
+),
+all_candidates AS (
+    SELECT
+        cm.itemid                   AS itemid,
+        cm.source_code              AS source_code, -- itemid
+        cm.source_label             AS source_label, -- symbolic information in case more mapping is required
+        cm.source_vocabulary_id     AS source_vocabulary_id,
+        cm.source_concept_class_id  AS source_concept_class_id,
+        cm.source_domain_id         AS source_domain_id,
+        cm.source_concept_id        AS source_concept_id,
+        cm.source_concept_name      AS source_concept_name,
+        vc2.vocabulary_id           AS target_vocabulary_id,
+        vc2.domain_id               AS target_domain_id,
+        vc2.concept_id              AS target_concept_id,
+        vc2.concept_name            AS target_concept_name,
+        vc2.standard_concept        AS target_standard_concept,
+        1                           AS match_priority
+    FROM
+        code_match cm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  cm.source_concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+    WHERE
+        cm.source_concept_id IS NOT NULL
+
+    UNION ALL
+
+    SELECT
+        nm.itemid                   AS itemid,
+        nm.source_code              AS source_code, -- itemid
+        nm.source_label             AS source_label, -- symbolic information in case more mapping is required
+        nm.source_vocabulary_id     AS source_vocabulary_id,
+        nm.source_concept_class_id  AS source_concept_class_id,
+        nm.source_domain_id         AS source_domain_id,
+        nm.source_concept_id        AS source_concept_id,
+        nm.source_concept_name      AS source_concept_name,
+        vc2.vocabulary_id           AS target_vocabulary_id,
+        vc2.domain_id               AS target_domain_id,
+        vc2.concept_id              AS target_concept_id,
+        vc2.concept_name            AS target_concept_name,
+        vc2.standard_concept        AS target_standard_concept,
+        2                           AS match_priority
+    FROM
+        name_match nm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  nm.source_concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+
+    UNION ALL
+
+    SELECT
+        sm.itemid                   AS itemid,
+        sm.source_code              AS source_code, -- itemid
+        sm.source_label             AS source_label, -- symbolic information in case more mapping is required
+        sm.source_vocabulary_id     AS source_vocabulary_id,
+        sm.source_concept_class_id  AS source_concept_class_id,
+        sm.source_domain_id         AS source_domain_id,
+        sm.source_concept_id        AS source_concept_id,
+        sm.source_concept_name      AS source_concept_name,
+        vc2.vocabulary_id           AS target_vocabulary_id,
+        vc2.domain_id               AS target_domain_id,
+        vc2.concept_id              AS target_concept_id,
+        vc2.concept_name            AS target_concept_name,
+        vc2.standard_concept        AS target_standard_concept,
+        3                           AS match_priority
+    FROM
+        synonym_match sm
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept_relationship vcr
+            ON  sm.source_concept_id = vcr.concept_id_1
+            AND vcr.relationship_id = 'Maps to'
+    LEFT JOIN
+        @etl_project.@etl_dataset.voc_concept vc2
+            ON vc2.concept_id = vcr.concept_id_2
+            AND vc2.standard_concept = 'S'
+            AND vc2.invalid_reason IS NULL
+
+    UNION ALL
+
+    SELECT
+        uf.itemid                   AS itemid,
+        uf.source_code              AS source_code,
+        uf.source_label             AS source_label,
+        uf.source_vocabulary_id     AS source_vocabulary_id,
+        uf.source_concept_class_id  AS source_concept_class_id,
+        uf.source_domain_id         AS source_domain_id,
+        uf.source_concept_id        AS source_concept_id,
+        uf.source_concept_name      AS source_concept_name,
+        uf.target_vocabulary_id     AS target_vocabulary_id,
+        uf.target_domain_id         AS target_domain_id,
+        uf.target_concept_id        AS target_concept_id,
+        uf.target_concept_name      AS target_concept_name,
+        uf.target_standard_concept  AS target_standard_concept,
+        4                           AS match_priority
+    FROM
+        unmapped_fallback uf
+),
+ranked_candidates AS (
+    SELECT
+        ac.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                ac.itemid,
+                ac.source_code,
+                ac.source_vocabulary_id,
+                ac.source_concept_class_id
+            ORDER BY
+                ac.match_priority,
+                CASE WHEN ac.target_standard_concept = 'S' THEN 0 ELSE 1 END,
+                CASE
+                    WHEN ac.target_domain_id = 'Measurement'
+                        AND ac.target_concept_name IS NOT NULL
+                        AND REGEXP_CONTAINS(LOWER(ac.target_concept_name), r'\bscreen(ing)?\b')
+                        AND REGEXP_CONTAINS(LOWER(ac.target_concept_name), r'\btest\b')
+                    THEN 0
+                    ELSE 1
+                END,
+                CASE
+                    WHEN ac.target_domain_id = 'Measurement'
+                        AND ac.target_concept_name IS NOT NULL
+                        AND REGEXP_CONTAINS(LOWER(ac.target_concept_name), r'\bscreen(ing)?\b')
+                    THEN 0
+                    ELSE 1
+                END,
+                CASE WHEN ac.target_concept_id IS NULL THEN 1 ELSE 0 END,
+                ac.target_concept_id
+        ) AS row_num
+    FROM
+        all_candidates ac
 )
 SELECT
-    cm.itemid                   AS itemid,
-    cm.source_code              AS source_code, -- itemid
-    cm.source_label             AS source_label, -- symbolic information in case more mapping is required
-    cm.source_vocabulary_id     AS source_vocabulary_id,
-    cm.source_concept_class_id  AS source_concept_class_id,
-    -- source_concept
-    cm.source_domain_id         AS source_domain_id,
-    cm.source_concept_id        AS source_concept_id,
-    cm.source_concept_name      AS source_concept_name,
-    -- target concept
-    vc2.vocabulary_id           AS target_vocabulary_id,
-    vc2.domain_id               AS target_domain_id,
-    vc2.concept_id              AS target_concept_id,
-    vc2.concept_name            AS target_concept_name,
-    vc2.standard_concept        AS target_standard_concept
+    rc.itemid                   AS itemid,
+    rc.source_code              AS source_code,
+    rc.source_label             AS source_label,
+    rc.source_vocabulary_id     AS source_vocabulary_id,
+    rc.source_concept_class_id  AS source_concept_class_id,
+    rc.source_domain_id         AS source_domain_id,
+    rc.source_concept_id        AS source_concept_id,
+    rc.source_concept_name      AS source_concept_name,
+    rc.target_vocabulary_id     AS target_vocabulary_id,
+    rc.target_domain_id         AS target_domain_id,
+    rc.target_concept_id        AS target_concept_id,
+    rc.target_concept_name      AS target_concept_name,
+    rc.target_standard_concept  AS target_standard_concept
 FROM
-    code_match cm
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  cm.source_concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
+    ranked_candidates rc
 WHERE
-    cm.source_concept_id IS NOT NULL
-UNION ALL
-SELECT
-    nm.itemid                   AS itemid,
-    nm.source_code              AS source_code, -- itemid
-    nm.source_label             AS source_label, -- symbolic information in case more mapping is required
-    nm.source_vocabulary_id     AS source_vocabulary_id,
-    nm.source_concept_class_id  AS source_concept_class_id,
-    -- source_concept
-    nm.source_domain_id         AS source_domain_id,
-    nm.source_concept_id        AS source_concept_id,
-    nm.source_concept_name      AS source_concept_name,
-    -- target concept
-    vc2.vocabulary_id           AS target_vocabulary_id,
-    vc2.domain_id               AS target_domain_id,
-    vc2.concept_id              AS target_concept_id,
-    vc2.concept_name            AS target_concept_name,
-    vc2.standard_concept        AS target_standard_concept
-FROM
-    name_match nm
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  nm.source_concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
-UNION ALL
-SELECT
-    sm.itemid                   AS itemid,
-    sm.source_code              AS source_code, -- itemid
-    sm.source_label             AS source_label, -- symbolic information in case more mapping is required
-    sm.source_vocabulary_id     AS source_vocabulary_id,
-    sm.source_concept_class_id  AS source_concept_class_id,
-    -- source_concept
-    sm.source_domain_id         AS source_domain_id,
-    sm.source_concept_id        AS source_concept_id,
-    sm.source_concept_name      AS source_concept_name,
-    -- target concept
-    vc2.vocabulary_id           AS target_vocabulary_id,
-    vc2.domain_id               AS target_domain_id,
-    vc2.concept_id              AS target_concept_id,
-    vc2.concept_name            AS target_concept_name,
-    vc2.standard_concept        AS target_standard_concept
-FROM
-    synonym_match sm
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept_relationship vcr
-        ON  sm.source_concept_id = vcr.concept_id_1
-        AND vcr.relationship_id = 'Maps to'
-LEFT JOIN
-    @etl_project.@etl_dataset.voc_concept vc2
-        ON vc2.concept_id = vcr.concept_id_2
-        AND vc2.standard_concept = 'S'
-        AND vc2.invalid_reason IS NULL
-UNION ALL
-SELECT
-    uf.itemid                   AS itemid,
-    uf.source_code              AS source_code,
-    uf.source_label             AS source_label,
-    uf.source_vocabulary_id     AS source_vocabulary_id,
-    uf.source_concept_class_id  AS source_concept_class_id,
-    uf.source_domain_id         AS source_domain_id,
-    uf.source_concept_id        AS source_concept_id,
-    uf.source_concept_name      AS source_concept_name,
-    uf.target_vocabulary_id     AS target_vocabulary_id,
-    uf.target_domain_id         AS target_domain_id,
-    uf.target_concept_id        AS target_concept_id,
-    uf.target_concept_name      AS target_concept_name,
-    uf.target_standard_concept  AS target_standard_concept
-FROM
-    unmapped_fallback uf
+    rc.row_num = 1
 ;
 
 -- -------------------------------------------------------------------
@@ -442,7 +499,7 @@ FROM
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_specimen_mapped AS
-SELECT
+SELECT DISTINCT
     `@etl_project.@etl_dataset`.obf_id_str(src.trace_id, 32)    AS specimen_id,
     src.subject_id                                              AS subject_id,
     COALESCE(src.hadm_id, hadm.hadm_id)                         AS hadm_id,
@@ -476,7 +533,7 @@ LEFT JOIN
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_meas_organism_mapped AS
-SELECT
+SELECT DISTINCT
     `@etl_project.@etl_dataset`.obf_id_str(src.trace_id, 64)    AS measurement_id,
     src.subject_id                                              AS subject_id,
     COALESCE(src.hadm_id, hadm.hadm_id)                         AS hadm_id,
@@ -525,7 +582,7 @@ LEFT JOIN
 -- -------------------------------------------------------------------
 
 CREATE OR REPLACE TABLE @etl_project.@etl_dataset.lk_meas_ab_mapped AS
-SELECT
+SELECT DISTINCT
     `@etl_project.@etl_dataset`.obf_id_str(src.trace_id, 64)    AS measurement_id,
     src.subject_id                                              AS subject_id,
     COALESCE(src.hadm_id, hadm.hadm_id)                         AS hadm_id,
